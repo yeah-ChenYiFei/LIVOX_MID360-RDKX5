@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 ROS2 -> Serial bridge for FCU communication.
@@ -163,7 +163,7 @@ class RosToSerialNode(Node):
             else:
                 rx = ry = rz = 0.0
 
-            spot_data = struct.pack("<3f", rx, ry, rz)
+            spot_data = struct.pack("<3d", rx, ry, rz)
 
             # assemble & send
             frame = (

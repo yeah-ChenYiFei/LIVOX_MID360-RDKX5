@@ -21,7 +21,7 @@
 #include <pcl_conversions/pcl_conversions.h>
 
 #include <pcl/segmentation/extract_clusters.h>
-#include <pcl/features/pca.h>
+#include <pcl/common/pca.h>
 #include <pcl/common/centroid.h>
 
 using PointT = pcl::PointXYZ;

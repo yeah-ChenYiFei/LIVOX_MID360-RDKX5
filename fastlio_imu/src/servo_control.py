@@ -9,7 +9,7 @@ import os
 
 PWM_CHIP = 0
 PWM_CHANNEL = 0
-PERIOD_NS = 20_000_000       # 50 Hz
+PERIOD_NS = 20000000       # 50 Hz
 MIN_PW_US = 500              # 0 deg
 MAX_PW_US = 2500             # 180 deg
 
