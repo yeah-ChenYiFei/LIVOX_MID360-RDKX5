@@ -1,0 +1,14 @@
+{
+	"backtraceGraph" : 
+	{
+		"commands" : [],
+		"files" : [],
+		"nodes" : []
+	},
+	"installers" : [],
+	"paths" : 
+	{
+		"build" : "fastlio_imu__py",
+		"source" : "/home/sunrise/livox_ws/src/build/fastlio_imu__py"
+	}
+}

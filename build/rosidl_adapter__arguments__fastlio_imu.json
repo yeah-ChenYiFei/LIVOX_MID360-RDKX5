@@ -1,0 +1,6 @@
+{
+  "package_name": "fastlio_imu",
+  "non_idl_tuples": [
+    "/home/sunrise/livox_ws/src/fastlio_imu:msg/Newmsg.msg"
+  ]
+}

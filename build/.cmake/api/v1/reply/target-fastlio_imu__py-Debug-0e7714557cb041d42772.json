@@ -1,0 +1,79 @@
+{
+	"backtrace" : 1,
+	"backtraceGraph" : 
+	{
+		"commands" : 
+		[
+			"add_custom_target"
+		],
+		"files" : 
+		[
+			"/home/sunrise/livox_ws/src/build/fastlio_imu__py/CMakeLists.txt"
+		],
+		"nodes" : 
+		[
+			{
+				"file" : 0
+			},
+			{
+				"command" : 0,
+				"file" : 0,
+				"line" : 34,
+				"parent" : 0
+			}
+		]
+	},
+	"dependencies" : 
+	[
+		{
+			"id" : "fastlio_imu::@6890427a1f51a3e7e1df"
+		}
+	],
+	"id" : "fastlio_imu__py::@f3c009f6d021d4da72f0",
+	"name" : "fastlio_imu__py",
+	"paths" : 
+	{
+		"build" : "fastlio_imu__py",
+		"source" : "/home/sunrise/livox_ws/src/build/fastlio_imu__py"
+	},
+	"sourceGroups" : 
+	[
+		{
+			"name" : "",
+			"sourceIndexes" : 
+			[
+				0
+			]
+		},
+		{
+			"name" : "CMake Rules",
+			"sourceIndexes" : 
+			[
+				1,
+				2
+			]
+		}
+	],
+	"sources" : 
+	[
+		{
+			"backtrace" : 1,
+			"isGenerated" : true,
+			"path" : "/home/sunrise/livox_ws/src/build/fastlio_imu__py/CMakeFiles/fastlio_imu__py",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 0,
+			"isGenerated" : true,
+			"path" : "/home/sunrise/livox_ws/src/build/fastlio_imu__py/CMakeFiles/fastlio_imu__py.rule",
+			"sourceGroupIndex" : 1
+		},
+		{
+			"backtrace" : 0,
+			"isGenerated" : true,
+			"path" : "/home/sunrise/livox_ws/src/build/rosidl_generator_py/fastlio_imu/_fastlio_imu_s.ep.rosidl_typesupport_fastrtps_c.c.rule",
+			"sourceGroupIndex" : 1
+		}
+	],
+	"type" : "UTILITY"
+}

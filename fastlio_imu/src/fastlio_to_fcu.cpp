@@ -2,7 +2,7 @@
 #include "nav_msgs/msg/odometry.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/twist_stamped.hpp"
-#include "sensor_msgs/msg/imu.hpp"   // <--- 【关键修复】必须添加这个头文件
+#include "sensor_msgs/msg/imu.hpp"
 #include "fastlio_imu/msg/newmsg.hpp" 
 #include <mutex>    
 
@@ -11,7 +11,7 @@ public:
   OdomToFCU() : Node("odom_to_fcu") {
     // 1. 订阅 Odometry
     odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
-      "/Odometry", 10, std::bind(&OdomToFCU::odom_callback, this, std::placeholders::_1));
+      "/Odometry_scpgo", 10, std::bind(&OdomToFCU::odom_callback, this, std::placeholders::_1));
     
     // 2. 订阅 IMU
     imu_sub_ = this->create_subscription<sensor_msgs::msg::Imu>(
