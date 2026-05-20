@@ -67,18 +67,6 @@ def pwm_init(chip, channel):
     
     print("✅ PWM 初始化成功")
 
-    base = f"/sys/class/pwm/pwmchip{chip}/pwm{channel}"
-    if not os.path.exists(base):
-        with open(f"/sys/class/pwm/pwmchip{chip}/export", "w") as f:
-            f.write(str(channel))
-        time.sleep(0.5)
-    with open(base + "/enable", "w") as f:
-        f.write("0")
-    with open(base + "/period", "w") as f:
-        f.write(str(PERIOD_NS))
-    with open(base + "/duty_cycle", "w") as f:
-        f.write(str(PERIOD_NS))
-
 def set_pulse_width(us):
     ns = us * 1000
     base = f"/sys/class/pwm/pwmchip{PWM_CHIP}/pwm{PWM_CHANNEL}"
