@@ -42,24 +42,14 @@ def generate_launch_description():
     )
 
 
-        # ============ 最终修复：调用系统全局python3 ============
-    # 获取Python脚本的绝对路径（确保路径正确）
-    ros_to_serial_script = "/home/sunrise/livox_ws/src/fastlio_imu/src/ros_to_serial.py"
-    # 验证脚本路径是否存在（可选，调试用）
-    if not os.path.exists(ros_to_serial_script):
-        raise FileNotFoundError(f"Python脚本不存在：{ros_to_serial_script}")
+    ros_to_serial_script = os.path.join(fastlio_imu_pkg, 'src', 'ros_to_serial.py')
 
     ros_to_serial_node = Node(
-        # 核心1：删除package参数，不限制查找范围
-        # package='fastlio_imu',  
-        # 核心2：用系统全局的python3（可先用which python3确认路径）
         executable='/usr/bin/python3',
-        # 核心3：传入脚本绝对路径作为参数
         arguments=[ros_to_serial_script],
         name='ros_to_serial_node',
         output='screen',
     )
-    # ======================================================
 
 
     return LaunchDescription([
