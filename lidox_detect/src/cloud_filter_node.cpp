@@ -63,7 +63,7 @@ private:
 
         pass.setInputCloud(cloud_proc);
         pass.setFilterFieldName("z");
-        pass.setFilterLimits(0.1, 2.2);
+        pass.setFilterLimits(0.1, 2.5);  // 圆环顶部 2.2m，留余量到 2.5m
         pass.filter(*cloud_proc);
 
         // 2. 体素降采样

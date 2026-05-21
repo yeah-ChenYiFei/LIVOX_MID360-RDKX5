@@ -24,7 +24,7 @@ include_directories(
 link_directories(${PCL_LIBRARY_DIRS})
 add_definitions(${PCL_DEFINITIONS})
 
-# 只编译 cloud_filter_node
+# cloud_filter_node
 add_executable(cloud_filter_node src/cloud_filter_node.cpp)
 ament_target_dependencies(cloud_filter_node
   rclcpp
@@ -37,9 +37,37 @@ ament_target_dependencies(cloud_filter_node
 )
 target_link_libraries(cloud_filter_node ${PCL_LIBRARIES})
 
+# ring_detect_node
+add_executable(ring_detect_node src/ring_detect_node.cpp)
+ament_target_dependencies(ring_detect_node
+  rclcpp
+  sensor_msgs
+  pcl_ros
+  pcl_msgs
+  pcl_conversions
+  tf2_ros
+  tf2_geometry_msgs
+)
+target_link_libraries(ring_detect_node ${PCL_LIBRARIES})
+
+# cube_pillar_node
+add_executable(cube_pillar_node src/cube_pillar_node.cpp)
+ament_target_dependencies(cube_pillar_node
+  rclcpp
+  sensor_msgs
+  pcl_ros
+  pcl_msgs
+  pcl_conversions
+  tf2_ros
+  tf2_geometry_msgs
+)
+target_link_libraries(cube_pillar_node ${PCL_LIBRARIES})
+
 # 安装
 install(TARGETS
   cloud_filter_node
+  ring_detect_node
+  cube_pillar_node
   DESTINATION lib/${PROJECT_NAME}
 )
 

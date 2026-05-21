@@ -4,9 +4,17 @@
 import rclpy
 from rclpy.node import Node
 from fastlio_imu.msg import Newmsg
+from geometry_msgs.msg import PoseStamped
 import serial
 import struct
 import math
+import time
+import threading
+import sys
+import os
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import control_t as servo
 
 # ================== 配置区 ==================
 SERIAL_PORT = '/dev/ttyS1'
@@ -17,8 +25,15 @@ TOPIC_NAME = '/test/newmsg'
 FRAME_HEAD = b'\xAA'
 POS_FLAG   = b'\x50'   # 位置数据标志，对应字符 'P'
 VEL_FLAG   = b'\x54'   # 速度数据标志，对应字符 'T'
+SPOT_FLAG  = b'\x53'   # 圆环检测标志，对应字符 'S'
+
+# 飞控命令
+CMD_HEAD  = 0xAA
+CMD_OPEN  = 0x01   # 投放指令
+CMD_TAIL  = 0xFF
 # =============================================
 
+# ================== 四元数转偏航 ==================
 def quaternion_to_yaw_deg(qx, qy, qz, qw):
     """
     将四元数转换为偏航角（单位：度），左转为负，右转为正。
@@ -33,19 +48,76 @@ class RosToSerialNode(Node):
     def __init__(self):
         super().__init__('ros_to_serial_node')
         try:
-            self.ser = serial.Serial(port=SERIAL_PORT, baudrate=BAUD_RATE, timeout=1)
-            self.get_logger().info(f"✅ 串口打开成功：{SERIAL_PORT} 波特率{BAUD_RATE}bps")
+            self.ser = serial.Serial(port=SERIAL_PORT, baudrate=BAUD_RATE, timeout=0.1)
+            self.get_logger().info(f"串口打开成功：{SERIAL_PORT} 波特率{BAUD_RATE}bps")
         except Exception as e:
-            self.get_logger().error(f"❌ 串口打开失败：{e}")
+            self.get_logger().error(f"串口打开失败：{e}")
             raise SystemExit(1)
-        
+
         self.subscription = self.create_subscription(
             Newmsg,
             TOPIC_NAME,
             self.callback,
             10
         )
-        self.get_logger().info(f"📡 正在订阅话题：{TOPIC_NAME}")
+
+        # 订阅圆环检测结果
+        self.ring_sub = self.create_subscription(
+            PoseStamped,
+            '/lidox/ring_center',
+            self.ring_callback,
+            10
+        )
+
+        self.latest_ring = None   # 缓存最新圆环位置
+        self._recv_running = True
+
+        # 初始化舵机
+        servo.init()
+        servo.close()
+        time.sleep(0.3)
+
+        # 启动串口接收线程
+        self._recv_thread = threading.Thread(target=self._serial_recv_loop, daemon=True)
+        self._recv_thread.start()
+
+        self.get_logger().info(f"正在订阅话题：{TOPIC_NAME}，串口接收已启动")
+
+    def ring_callback(self, msg):
+        """缓存最新圆环检测结果"""
+        self.latest_ring = msg
+
+    def _serial_recv_loop(self):
+        """后台线程：监听飞控下发的指令"""
+        buf = bytearray()
+        while self._recv_running:
+            try:
+                data = self.ser.read(1)
+                if not data:
+                    continue
+                buf.append(data[0])
+
+                # 搜索帧头 0xAA
+                while len(buf) > 0 and buf[0] != CMD_HEAD:
+                    buf.pop(0)
+
+                # 等待完整帧: AA cmd FF (3字节)
+                if len(buf) >= 3:
+                    if buf[0] == CMD_HEAD and buf[2] == CMD_TAIL:
+                        cmd = buf[1]
+                        if cmd == CMD_OPEN:
+                            self.get_logger().info("收到投放指令 AA 01 FF")
+                            servo.open()
+                            time.sleep(1.0)
+                            servo.close()
+                        else:
+                            self.get_logger().warn(f"未知指令: AA {cmd:02X} FF")
+                        buf = bytearray()  # 清空缓冲区
+                    else:
+                        buf.pop(0)  # 不匹配，丢弃首字节继续搜索
+            except Exception as e:
+                self.get_logger().warn(f"串口接收异常: {e}")
+                time.sleep(0.01)
 
     def callback(self, msg):
         """回调函数：将ROS消息打包为二进制帧并发送"""
@@ -78,10 +150,19 @@ class RosToSerialNode(Node):
             # 3. 打包速度数据（6个 double，小端序）
             vel_data = struct.pack('<6d', vx, vy, vz, wx, wy, wz)
 
-            # 4. 组装完整帧：帧头 + 位置标志 + 位置数据 + 速度标志 + 速度数据
-            frame = FRAME_HEAD + POS_FLAG + pos_data + VEL_FLAG + vel_data
+            # 4. 打包圆环检测数据（实际由 ring_detect_node 提供）
+            if self.latest_ring is not None:
+                rx = self.latest_ring.pose.position.x
+                ry = self.latest_ring.pose.position.y
+                rz = self.latest_ring.pose.position.z
+            else:
+                rx = ry = rz = 0.0   # 未检测到圆环时填 0
+            spot_data = struct.pack('<3f', rx, ry, rz)
 
-            # 5. 发送
+            # 5. 组装完整帧：帧头 + 位置 + 速度 + 圆环
+            frame = FRAME_HEAD + POS_FLAG + pos_data + VEL_FLAG + vel_data + SPOT_FLAG + spot_data
+
+            # 6. 发送
             self.ser.write(frame)
 
             # 可选：打印调试信息
@@ -96,9 +177,11 @@ class RosToSerialNode(Node):
             traceback.print_exc()
 
     def close_serial(self):
+        self._recv_running = False
         if hasattr(self, 'ser') and self.ser.is_open:
             self.ser.close()
-            self.get_logger().info("🔌 串口已关闭")
+            self.get_logger().info("串口已关闭")
+        servo.off()
 
 def main(args=None):
     rclpy.init(args=args)

@@ -52,10 +52,34 @@ def generate_launch_description():
     )
 
 
+    cloud_filter_node = Node(
+        package='lidox_detect',
+        executable='cloud_filter_node',
+        name='cloud_filter_node',
+        output='screen'
+    )
+
+    ring_detect_node = Node(
+        package='lidox_detect',
+        executable='ring_detect_node',
+        name='ring_detect_node',
+        output='screen'
+    )
+
+    cube_pillar_node = Node(
+        package='lidox_detect',
+        executable='cube_pillar_node',
+        name='cube_pillar_node',
+        output='screen'
+    )
+
     return LaunchDescription([
         # livox_launch,
         fastlio_launch,
         forward_node,
         ros_to_serial_node,
-        sc_pgo_launch
+        sc_pgo_launch,
+        cloud_filter_node,
+        ring_detect_node,
+        cube_pillar_node
     ])
