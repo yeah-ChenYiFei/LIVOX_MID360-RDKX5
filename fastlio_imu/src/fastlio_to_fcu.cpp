@@ -3,7 +3,7 @@
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/twist_stamped.hpp"
 #include "sensor_msgs/msg/imu.hpp"
-#include "fastlio_imu/msg/newmsg.hpp" 
+#include "fastlio_imu/msg/fcu_state.hpp" 
 #include <mutex>    
 
 class OdomToFCU : public rclcpp::Node { 
@@ -18,14 +18,14 @@ public:
       "/livox/imu", 10, std::bind(&OdomToFCU::imu_callback, this, std::placeholders::_1));
 
     // 3. 初始化发布者
-    pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("/test/odom", 10);
-    twist_pub_ = this->create_publisher<geometry_msgs::msg::TwistStamped>("/test/twist", 10);
+    pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("/fcu/odom_pose", 10);
+    twist_pub_ = this->create_publisher<geometry_msgs::msg::TwistStamped>("/fcu/odom_twist", 10);
     
     // 用来转发原始 IMU
-    imu_pub_ = this->create_publisher<sensor_msgs::msg::Imu>("/test/imu", 10);
+    imu_pub_ = this->create_publisher<sensor_msgs::msg::Imu>("/fcu/imu", 10);
 
     // 发布融合后的自定义消息
-    newmsg_pub_ = this->create_publisher<fastlio_imu::msg::Newmsg>("/test/newmsg", 10);
+    fcu_state_pub_ = this->create_publisher<fastlio_imu::msg::FcuState>("/fcu/state", 10);
   }
 
 private:
@@ -58,13 +58,13 @@ private:
     twist_pub_->publish(twist_msg);
 
     // 2. 核心逻辑：尝试融合数据
-    fastlio_imu::msg::Newmsg new_msg;
+    fastlio_imu::msg::FcuState fcu_msg;
     
     // 写入 Odometry 的信息 (位置、姿态、线速度)
-    new_msg.header = msg->header;
+    fcu_msg.header = msg->header;
     twist_msg.header.frame_id = "xyz_position&twist"; 
-    new_msg.pose = msg->pose.pose;
-    new_msg.twist.linear = msg->twist.twist.linear; // 线速度来自 FAST-LIO
+    fcu_msg.pose = msg->pose.pose;
+    fcu_msg.twist.linear = msg->twist.twist.linear; // 线速度来自 FAST-LIO
 
     // 写入 IMU 的信息 (角速度)
     {
@@ -72,18 +72,18 @@ private:
       
       if (has_imu_data_) {
         // 如果已经收到了 IMU 数据，则融合
-        new_msg.twist.angular = latest_imu_.angular_velocity;
+        fcu_msg.twist.angular = latest_imu_.angular_velocity;
         // 注意：这里的时间戳是 Odometry 的，角速度用的是最新的 IMU 值
         // 这样做在数据延迟较小的情况下是可行的
       } else {
         // 如果还没收到 IMU 数据，暂时用 Odometry 自带的(可能为0)
-        new_msg.twist.angular = msg->twist.twist.angular;
+        fcu_msg.twist.angular = msg->twist.twist.angular;
         RCLCPP_WARN_ONCE(this->get_logger(), "IMU data not received yet, publishing odom-only angular vel.");
       }
     }
 
     // 3. 最终发布融合消息
-    newmsg_pub_->publish(new_msg);
+    fcu_state_pub_->publish(fcu_msg);
   }
 
   // --- 成员变量 ---
@@ -93,7 +93,7 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr twist_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
-  rclcpp::Publisher<fastlio_imu::msg::Newmsg>::SharedPtr newmsg_pub_;
+  rclcpp::Publisher<fastlio_imu::msg::FcuState>::SharedPtr fcu_state_pub_;
 
   // 用于数据同步的缓存变量
   sensor_msgs::msg::Imu latest_imu_; // 存储最新的 IMU 数据

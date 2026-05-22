@@ -3,7 +3,7 @@
 <package format="3">
   <name>lidox_detect</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>LiDAR point cloud shape detection (ring + pillar) for Livox MID-360 on RDK X5</description>
   <maintainer email="chenyanfu2006@foxmail.com">sunrise</maintainer>
   <license>TODO: License declaration</license>
 

@@ -128,7 +128,7 @@ def find_deadzone():
     print(f"  死区上边界: {dead_upper} us")
     print(f"  死区下边界: {dead_lower} us")
     print(f"  死区宽度:   {dead_width} us")
-    print(f"  死区中心:   {dead_center} us  ← 填入 control_t.py 的 STOP_PW_US")
+    print(f"  死区中心:   {dead_center} us  ← 填入 servo_control.py 的 STOP_PW_US")
     print("=" * 55)
 
     # ---- 第五步: 验证 ----

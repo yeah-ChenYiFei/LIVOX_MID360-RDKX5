@@ -18,7 +18,7 @@ find_package(rclpy REQUIRED)
 
 # 2. 先定义消息生成 (原有逻辑不变)
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/Newmsg.msg"
+  "msg/FcuState.msg"
   DEPENDENCIES geometry_msgs std_msgs
 )
 
@@ -41,7 +41,8 @@ rosidl_target_interfaces(fastlio_to_fcu
 
 # ============ 仅保留Python可执行脚本安装（彻底删除ament_python_install_package） ============
 install(PROGRAMS
-  src/ros_to_serial.py  # 你的实际Python脚本路径
+  src/ros_to_serial.py
+  src/servo_control.py
   DESTINATION lib/${PROJECT_NAME}
 )
 # ================================================================

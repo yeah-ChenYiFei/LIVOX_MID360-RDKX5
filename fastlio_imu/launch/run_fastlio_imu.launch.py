@@ -59,18 +59,25 @@ def generate_launch_description():
         output='screen'
     )
 
-    ring_detect_node = Node(
+    shape_detect_node = Node(
         package='lidox_detect',
-        executable='ring_detect_node',
-        name='ring_detect_node',
-        output='screen'
-    )
-
-    cube_pillar_node = Node(
-        package='lidox_detect',
-        executable='cube_pillar_node',
-        name='cube_pillar_node',
-        output='screen'
+        executable='shape_detect_node',
+        name='shape_detect_node',
+        output='screen',
+        parameters=[{
+            'cluster_tolerance': 0.15,
+            'min_cluster_size_ring': 30,
+            'min_cluster_size_pillar': 80,
+            'max_cluster_size': 8000,
+            'ring_l2_l1_min': 0.4,
+            'ring_l3_l1_max': 0.35,
+            'ring_inner_radius': 0.35,
+            'ring_outer_radius': 0.65,
+            'ring_inner_ratio_max': 0.2,
+            'ring_band_ratio_min': 0.4,
+            'pillar_l2_l1_max': 0.35,
+            'pillar_l1_l3_min': 8.0,
+        }]
     )
 
     return LaunchDescription([
@@ -80,6 +87,5 @@ def generate_launch_description():
         ros_to_serial_node,
         sc_pgo_launch,
         cloud_filter_node,
-        ring_detect_node,
-        cube_pillar_node
+        shape_detect_node
     ])
