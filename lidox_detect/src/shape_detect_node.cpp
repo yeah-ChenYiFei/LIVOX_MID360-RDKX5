@@ -42,10 +42,11 @@ public:
         max_cluster_        = declare("max_cluster_size",         8000);
 
         // ring – RANSAC circle2D
-        ring_fit_tol_   = declare("ring_fit_tolerance",     0.03);
+        ring_fit_tol_   = declare("ring_fit_tolerance",     0.02);
         ring_inner_r_   = declare("ring_inner_radius",      0.35);
         ring_outer_r_   = declare("ring_outer_radius",      0.65);
-        ring_inlier_min_= declare("ring_inlier_ratio_min",  0.50);
+        ring_inlier_min_= declare("ring_inlier_ratio_min",  0.70);
+        ring_max_pts_   = declare("ring_max_points",        100);
 
         // pillar – PCA
         pillar_l2l1_max_ = declare("pillar_l2_l1_max",      0.35);
@@ -120,28 +121,53 @@ private:
         }
     }
 
-    // ── ring: hand-written RANSAC circle2D (no pcl_segmentation dep) ──
+    // ── ring: RANSAC circle2D on XY, XZ, YZ projections ──────
     bool is_ring(const PointCloudT::Ptr &cluster,
                  Eigen::Vector3f &center, float &radius) {
         int n = static_cast<int>(cluster->size());
         if (n < min_cluster_ring_) return false;
+        if (n > ring_max_pts_) return false;
 
+        float best_ratio = 0;
+        Eigen::Vector3f best_center(0, 0, 0);
+        float best_r = 0;
+
+        // try all 3 projection planes
+        try_plane(0, 1, 2, cluster, n, best_center, best_r, best_ratio);  // XY
+        try_plane(0, 2, 1, cluster, n, best_center, best_r, best_ratio);  // XZ
+        try_plane(1, 2, 0, cluster, n, best_center, best_r, best_ratio);  // YZ
+
+        if (best_ratio < ring_inlier_min_) return false;
+
+        center = best_center;
+        radius = best_r;
+        return true;
+    }
+
+    // ax_a, ax_b = which axes form the circle plane; ax_z = orthogonal axis
+    void try_plane(int ax_a, int ax_b, int ax_z,
+                   const PointCloudT::Ptr &cluster, int n,
+                   Eigen::Vector3f &best_center, float &best_r, float &best_ratio) {
         std::mt19937 rng(42);
         int best_inliers = 0;
-        float best_cx = 0, best_cy = 0, best_r = 0;
+        float best_ca = 0, best_cb = 0, best_cz = 0, best_radius = 0;
 
-        auto fit_circle = [](float x1, float y1, float x2, float y2,
-                             float x3, float y3,
-                             float &cx, float &cy, float &r) -> bool {
-            float d = 2.0f * (x1*(y2-y3) + x2*(y3-y1) + x3*(y1-y2));
-            if (std::fabs(d) < 1e-6f) return false;  // colinear
-            float s1 = x1*x1 + y1*y1;
-            float s2 = x2*x2 + y2*y2;
-            float s3 = x3*x3 + y3*y3;
-            cx = (s1*(y2-y3) + s2*(y3-y1) + s3*(y1-y2)) / d;
-            cy = (s1*(x3-x2) + s2*(x1-x3) + s3*(x2-x1)) / d;
-            r  = std::hypot(cx - x1, cy - y1);
-            return true;  // radius check done after fit
+        auto get_val = [](const pcl::PointXYZ &p, int axis) -> float {
+            return *(&p.x + axis);
+        };
+
+        auto fit_circle = [](float a1, float b1, float a2, float b2,
+                             float a3, float b3,
+                             float &ca, float &cb, float &r) -> bool {
+            float d = 2.0f * (a1*(b2-b3) + a2*(b3-b1) + a3*(b1-b2));
+            if (std::fabs(d) < 1e-6f) return false;
+            float s1 = a1*a1 + b1*b1;
+            float s2 = a2*a2 + b2*b2;
+            float s3 = a3*a3 + b3*b3;
+            ca = (s1*(b2-b3) + s2*(b3-b1) + s3*(b1-b2)) / d;
+            cb = (s1*(a3-a2) + s2*(a1-a3) + s3*(a2-a1)) / d;
+            r  = std::hypot(ca - a1, cb - b1);
+            return true;
         };
 
         int iter = std::min(200, n * 5);
@@ -150,52 +176,59 @@ private:
             int i2 = rng() % n, i3 = rng() % n;
             if (i1 == i2 || i1 == i3 || i2 == i3) continue;
 
-            float cx, cy, r;
-            if (!fit_circle(cluster->points[i1].x, cluster->points[i1].y,
-                            cluster->points[i2].x, cluster->points[i2].y,
-                            cluster->points[i3].x, cluster->points[i3].y,
-                            cx, cy, r))
+            float ca, cb, r;
+            float a1 = get_val(cluster->points[i1], ax_a);
+            float b1 = get_val(cluster->points[i1], ax_b);
+            float a2 = get_val(cluster->points[i2], ax_a);
+            float b2 = get_val(cluster->points[i2], ax_b);
+            float a3 = get_val(cluster->points[i3], ax_a);
+            float b3 = get_val(cluster->points[i3], ax_b);
+
+            if (!fit_circle(a1, b1, a2, b2, a3, b3, ca, cb, r))
                 continue;
             if (r < ring_inner_r_ || r > ring_outer_r_) continue;
 
             int cnt = 0;
             float tol_sq = ring_fit_tol_ * ring_fit_tol_;
             for (int i = 0; i < n; i++) {
-                float dx = cluster->points[i].x - cx;
-                float dy = cluster->points[i].y - cy;
-                float dr = std::fabs(std::hypot(dx, dy) - r);
+                float da = get_val(cluster->points[i], ax_a) - ca;
+                float db = get_val(cluster->points[i], ax_b) - cb;
+                float dr = std::fabs(std::hypot(da, db) - r);
                 if (dr * dr < tol_sq) cnt++;
             }
 
             if (cnt > best_inliers) {
                 best_inliers = cnt;
-                best_cx = cx;
-                best_cy = cy;
-                best_r  = r;
+                best_ca = ca;
+                best_cb = cb;
+                best_radius = r;
+                // avg Z from inliers
+                float z_sum = 0;
+                int z_cnt = 0;
+                for (int i = 0; i < n; i++) {
+                    float da = get_val(cluster->points[i], ax_a) - ca;
+                    float db = get_val(cluster->points[i], ax_b) - cb;
+                    float dr = std::fabs(std::hypot(da, db) - r);
+                    if (dr * dr < tol_sq) {
+                        z_sum += get_val(cluster->points[i], ax_z);
+                        z_cnt++;
+                    }
+                }
+                best_cz = z_cnt > 0 ? z_sum / z_cnt : 0;
             }
         }
 
         float ratio = static_cast<float>(best_inliers) / n;
-        if (ratio < ring_inlier_min_) return false;
-
-        // compute Z from best-fit inliers
-        float tol_sq = ring_fit_tol_ * ring_fit_tol_;
-        float z_sum = 0;
-        int zi_cnt = 0;
-        for (int i = 0; i < n; i++) {
-            float dx = cluster->points[i].x - best_cx;
-            float dy = cluster->points[i].y - best_cy;
-            float dr = std::fabs(std::hypot(dx, dy) - best_r);
-            if (dr * dr < tol_sq) {
-                z_sum += cluster->points[i].z;
-                zi_cnt++;
-            }
+        if (ratio > best_ratio) {
+            best_ratio = ratio;
+            // map back to 3D
+            float vals[3] = {0, 0, 0};
+            vals[ax_a] = best_ca;
+            vals[ax_b] = best_cb;
+            vals[ax_z] = best_cz;
+            best_center = Eigen::Vector3f(vals[0], vals[1], vals[2]);
+            best_r = best_radius;
         }
-        center.x() = best_cx;
-        center.y() = best_cy;
-        center.z() = zi_cnt > 0 ? z_sum / zi_cnt : 0;
-        radius = best_r;
-        return true;
     }
 
     // ── pillar: PCA ───────────────────────────────────────
@@ -242,6 +275,7 @@ private:
 
     // ring: RANSAC circle2D
     double ring_fit_tol_, ring_inner_r_, ring_outer_r_, ring_inlier_min_;
+    int ring_max_pts_;
 
     // pillar: PCA
     double pillar_l2l1_max_, pillar_l1l3_min_;

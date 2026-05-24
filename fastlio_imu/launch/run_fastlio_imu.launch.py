@@ -69,10 +69,11 @@ def generate_launch_description():
             'min_cluster_size_ring': 10,
             'min_cluster_size_pillar': 80,
             'max_cluster_size': 8000,
-            'ring_fit_tolerance': 0.03,
+            'ring_fit_tolerance': 0.02,
             'ring_inner_radius': 0.35,
             'ring_outer_radius': 0.65,
-            'ring_inlier_ratio_min': 0.50,
+            'ring_inlier_ratio_min': 0.70,
+            'ring_max_points': 100,
             'pillar_l2_l1_max': 0.35,
             'pillar_l1_l3_min': 8.0,
         }]
