@@ -37,7 +37,7 @@ public:
     ShapeDetectNode() : Node("shape_detect_node") {
         // ── parameters ──────────────────────────────────────
         cluster_tol_        = declare("cluster_tolerance",        0.20);
-        min_cluster_ring_   = declare("min_cluster_size_ring",    10);
+        min_cluster_ring_   = declare("min_cluster_size_ring",    15);
         min_cluster_pillar_ = declare("min_cluster_size_pillar",  80);
         max_cluster_        = declare("max_cluster_size",         8000);
 
@@ -45,7 +45,7 @@ public:
         ring_fit_tol_   = declare("ring_fit_tolerance",     0.02);
         ring_inner_r_   = declare("ring_inner_radius",      0.35);
         ring_outer_r_   = declare("ring_outer_radius",      0.65);
-        ring_inlier_min_= declare("ring_inlier_ratio_min",  0.70);
+        ring_inlier_min_= declare("ring_inlier_ratio_min",  0.80);
         ring_max_pts_   = declare("ring_max_points",        100);
 
         // pillar – PCA
@@ -83,7 +83,7 @@ private:
         std::vector<pcl::PointIndices> cluster_indices;
         pcl::EuclideanClusterExtraction<PointT> ec;
         ec.setClusterTolerance(cluster_tol_);
-        ec.setMinClusterSize(min_cluster_ring_);
+        ec.setMinClusterSize(10);  // low floor for thin rings
         ec.setMaxClusterSize(max_cluster_);
         ec.setSearchMethod(tree);
         ec.setInputCloud(cloud);
@@ -121,12 +121,17 @@ private:
         }
     }
 
-    // ── ring: RANSAC circle2D on XY, XZ, YZ projections ──────
+    // ── ring: PCA pre-filter + RANSAC circle2D on 3 planes ───
     bool is_ring(const PointCloudT::Ptr &cluster,
                  Eigen::Vector3f &center, float &radius) {
         int n = static_cast<int>(cluster->size());
         if (n < min_cluster_ring_) return false;
         if (n > ring_max_pts_) return false;
+
+        // PCA pre-filter: must be thin (λ3 ≪ λ1) and roughly circular (λ2 ≈ λ1)
+        Eigen::Vector3f ev = sorted_eigenvalues(cluster);
+        if (ev(2) / ev(0) > 0.25f) return false;  // not thin enough (blob/wall)
+        if (ev(1) / ev(0) < 0.30f) return false;  // not circular enough (line)
 
         float best_ratio = 0;
         Eigen::Vector3f best_center(0, 0, 0);
