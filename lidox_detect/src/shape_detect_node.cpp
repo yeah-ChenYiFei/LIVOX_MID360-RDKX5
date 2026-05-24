@@ -19,6 +19,14 @@
 #include <pcl/common/centroid.h>
 
 #include <random>
+#include <algorithm>
+
+// Temporal consistency tracking
+struct TrackedRing {
+    Eigen::Vector3f center;
+    int hits = 0;
+    int misses = 0;
+};
 
 using PointT = pcl::PointXYZ;
 using PointCloudT = pcl::PointCloud<PointT>;
@@ -92,6 +100,8 @@ private:
         RCLCPP_INFO(get_logger(), "cloud %ld pts -> %ld clusters",
                     cloud->size(), cluster_indices.size());
 
+        std::vector<Eigen::Vector3f> frame_ring_centers;
+
         for (auto &indices : cluster_indices) {
             PointCloudT::Ptr cluster(new PointCloudT);
             for (auto idx : indices.indices)
@@ -103,14 +113,14 @@ private:
             Eigen::Vector4f centroid;
             pcl::compute3DCentroid(*cluster, centroid);
 
-            // ── ring: RANSAC circle2D in XY plane ──────
+            // ── ring: RANSAC circle2D on 3 planes ──────
             Eigen::Vector3f ring_center;
             float ring_radius;
             if (is_ring(cluster, ring_center, ring_radius)) {
                 RCLCPP_INFO(get_logger(),
                     "RING: n=%d center=(%.2f,%.2f,%.2f) r=%.3f",
                     n, ring_center.x(), ring_center.y(), ring_center.z(), ring_radius);
-                publish_ring(ring_center);
+                frame_ring_centers.push_back(ring_center);
             }
 
             // ── pillar: PCA (Z stretched) ─────────────
@@ -119,6 +129,10 @@ private:
             if (is_pillar(n, l1, l2, l3))
                 publish_pillar(centroid);
         }
+
+        // Temporal consistency filter
+        update_tracked_rings(frame_ring_centers);
+        publish_confirmed_ring();
     }
 
     // ── ring: PCA pre-filter + RANSAC circle2D on 3 planes ───
@@ -269,6 +283,53 @@ private:
                     pose.pose.position.x, pose.pose.position.y, pose.pose.position.z);
     }
 
+    // ── temporal consistency ────────────────────────────
+    void update_tracked_rings(const std::vector<Eigen::Vector3f>& centers) {
+        std::vector<bool> used(centers.size(), false);
+
+        for (auto &tr : tracked_) {
+            float best_dist = temporal_tol_;
+            int best_idx = -1;
+            for (size_t i = 0; i < centers.size(); i++) {
+                if (used[i]) continue;
+                float d = (tr.center - centers[i]).norm();
+                if (d < best_dist) { best_dist = d; best_idx = i; }
+            }
+            if (best_idx >= 0) {
+                tr.center = tr.center * 0.7f + centers[best_idx] * 0.3f;
+                tr.hits++;
+                tr.misses = 0;
+                used[best_idx] = true;
+            } else {
+                tr.misses++;
+            }
+        }
+
+        for (size_t i = 0; i < centers.size(); i++) {
+            if (!used[i])
+                tracked_.push_back({centers[i], 1, 0});
+        }
+
+        tracked_.erase(
+            std::remove_if(tracked_.begin(), tracked_.end(),
+                [this](const TrackedRing &tr) { return tr.misses >= stale_frames_; }),
+            tracked_.end());
+    }
+
+    void publish_confirmed_ring() {
+        const TrackedRing *best = nullptr;
+        for (auto &tr : tracked_) {
+            if (tr.hits < confirm_frames_) continue;
+            if (!best || tr.hits > best->hits) best = &tr;
+        }
+        if (best) {
+            RCLCPP_INFO(get_logger(),
+                "PUBLISH ring: center=(%.2f,%.2f,%.2f) hits=%d",
+                best->center.x(), best->center.y(), best->center.z(), best->hits);
+            publish_ring(best->center);
+        }
+    }
+
     // ── members ───────────────────────────────────────────
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_sub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr  ring_pub_;
@@ -284,6 +345,12 @@ private:
 
     // pillar: PCA
     double pillar_l2l1_max_, pillar_l1l3_min_;
+
+    // temporal consistency
+    std::vector<TrackedRing> tracked_;
+    float temporal_tol_ = 0.15f;
+    int confirm_frames_ = 3;
+    int stale_frames_ = 5;
 };
 
 
