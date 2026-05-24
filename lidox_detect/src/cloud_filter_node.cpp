@@ -68,7 +68,7 @@ private:
 
         pass.setInputCloud(cloud_proc);
         pass.setFilterFieldName("z");
-        pass.setFilterLimits(0.1, 2.5);
+        pass.setFilterLimits(0.5, 1.5);  // ring at ~1m height
         pass.filter(*cloud_proc);
 
         RCLCPP_INFO(get_logger(), "after passthrough: %ld pts", cloud_proc->size());
@@ -89,7 +89,7 @@ private:
         seg.setOptimizeCoefficients(true);
         seg.setModelType(pcl::SACMODEL_PLANE);
         seg.setMethodType(pcl::SAC_RANSAC);
-        seg.setDistanceThreshold(0.05);
+        seg.setDistanceThreshold(0.02);
         seg.setInputCloud(cloud_proc);
         seg.segment(*plane_inliers, *plane_coeff);
 
