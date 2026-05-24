@@ -15,9 +15,10 @@
 #include <pcl_conversions/pcl_conversions.h>
 
 #include <pcl/segmentation/extract_clusters.h>
-#include <pcl/segmentation/sac_segmentation.h>
 #include <pcl/common/pca.h>
 #include <pcl/common/centroid.h>
+
+#include <random>
 
 using PointT = pcl::PointXYZ;
 using PointCloudT = pcl::PointCloud<PointT>;
@@ -119,43 +120,80 @@ private:
         }
     }
 
-    // ── ring: RANSAC circle2D ──────────────────────────────
+    // ── ring: hand-written RANSAC circle2D (no pcl_segmentation dep) ──
     bool is_ring(const PointCloudT::Ptr &cluster,
                  Eigen::Vector3f &center, float &radius) {
         int n = static_cast<int>(cluster->size());
         if (n < min_cluster_ring_) return false;
 
-        // project to XY
-        pcl::PointCloud<pcl::PointXY>::Ptr xy(new pcl::PointCloud<pcl::PointXY>);
-        xy->reserve(n);
-        for (auto &pt : cluster->points)
-            xy->push_back(pcl::PointXY(pt.x, pt.y));
+        std::mt19937 rng(42);
+        int best_inliers = 0;
+        float best_cx = 0, best_cy = 0, best_r = 0;
 
-        pcl::SACSegmentation<pcl::PointXY> seg;
-        seg.setOptimizeCoefficients(true);
-        seg.setModelType(pcl::SACMODEL_CIRCLE2D);
-        seg.setMethodType(pcl::SAC_RANSAC);
-        seg.setDistanceThreshold(ring_fit_tol_);
-        seg.setMaxIterations(200);
-        seg.setRadiusLimits(ring_inner_r_, ring_outer_r_);
+        auto fit_circle = [](float x1, float y1, float x2, float y2,
+                             float x3, float y3,
+                             float &cx, float &cy, float &r) -> bool {
+            float d = 2.0f * (x1*(y2-y3) + x2*(y3-y1) + x3*(y1-y2));
+            if (std::fabs(d) < 1e-6f) return false;  // colinear
+            float s1 = x1*x1 + y1*y1;
+            float s2 = x2*x2 + y2*y2;
+            float s3 = x3*x3 + y3*y3;
+            cx = (s1*(y2-y3) + s2*(y3-y1) + s3*(y1-y2)) / d;
+            cy = (s1*(x3-x2) + s2*(x1-x3) + s3*(x2-x1)) / d;
+            r  = std::hypot(cx - x1, cy - y1);
+            return r > ring_inner_r_ && r < ring_outer_r_;
+        };
 
-        pcl::ModelCoefficients coeff;
-        pcl::PointIndices inliers;
-        seg.setInputCloud(xy);
-        seg.segment(inliers, coeff);
+        int iter = std::min(200, n * 5);
+        for (int k = 0; k < iter; k++) {
+            int i1 = rng() % n;
+            int i2 = rng() % n, i3 = rng() % n;
+            if (i1 == i2 || i1 == i3 || i2 == i3) continue;
 
-        if (inliers.indices.empty()) return false;
+            float cx, cy, r;
+            if (!fit_circle(cluster->points[i1].x, cluster->points[i1].y,
+                            cluster->points[i2].x, cluster->points[i2].y,
+                            cluster->points[i3].x, cluster->points[i3].y,
+                            cx, cy, r))
+                continue;
 
-        float ratio = static_cast<float>(inliers.indices.size()) / n;
+            int cnt = 0;
+            float tol_sq = ring_fit_tol_ * ring_fit_tol_;
+            for (int i = 0; i < n; i++) {
+                float dx = cluster->points[i].x - cx;
+                float dy = cluster->points[i].y - cy;
+                float dr = std::fabs(std::hypot(dx, dy) - r);
+                if (dr * dr < tol_sq) cnt++;
+            }
+
+            if (cnt > best_inliers) {
+                best_inliers = cnt;
+                best_cx = cx;
+                best_cy = cy;
+                best_r  = r;
+            }
+        }
+
+        float ratio = static_cast<float>(best_inliers) / n;
         if (ratio < ring_inlier_min_) return false;
 
-        center.x() = coeff.values[0];
-        center.y() = coeff.values[1];
-        center.z() = 0;
-        for (auto idx : inliers.indices)
-            center.z() += cluster->points[idx].z;
-        center.z() /= inliers.indices.size();
-        radius = coeff.values[2];
+        // compute Z from best-fit inliers
+        float tol_sq = ring_fit_tol_ * ring_fit_tol_;
+        float z_sum = 0;
+        int zi_cnt = 0;
+        for (int i = 0; i < n; i++) {
+            float dx = cluster->points[i].x - best_cx;
+            float dy = cluster->points[i].y - best_cy;
+            float dr = std::fabs(std::hypot(dx, dy) - best_r);
+            if (dr * dr < tol_sq) {
+                z_sum += cluster->points[i].z;
+                zi_cnt++;
+            }
+        }
+        center.x() = best_cx;
+        center.y() = best_cy;
+        center.z() = zi_cnt > 0 ? z_sum / zi_cnt : 0;
+        radius = best_r;
         return true;
     }
 
