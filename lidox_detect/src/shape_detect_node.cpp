@@ -141,7 +141,7 @@ private:
             cx = (s1*(y2-y3) + s2*(y3-y1) + s3*(y1-y2)) / d;
             cy = (s1*(x3-x2) + s2*(x1-x3) + s3*(x2-x1)) / d;
             r  = std::hypot(cx - x1, cy - y1);
-            return r > ring_inner_r_ && r < ring_outer_r_;
+            return true;  // radius check done after fit
         };
 
         int iter = std::min(200, n * 5);
@@ -156,6 +156,7 @@ private:
                             cluster->points[i3].x, cluster->points[i3].y,
                             cx, cy, r))
                 continue;
+            if (r < ring_inner_r_ || r > ring_outer_r_) continue;
 
             int cnt = 0;
             float tol_sq = ring_fit_tol_ * ring_fit_tol_;
