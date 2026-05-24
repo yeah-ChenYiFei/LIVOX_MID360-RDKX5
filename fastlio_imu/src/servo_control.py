@@ -13,7 +13,7 @@ PERIOD_NS = 20000000       # 50 Hz
 MIN_PW_US = 500              # 0 deg
 MAX_PW_US = 2500             # 180 deg
 
-STAGES = [0, 40, 80, 115]    # advance-only stages
+STAGES = [0, 40, 80, 120]    # advance-only stages
 
 _current_stage = 0
 _initialized = False

@@ -41,7 +41,8 @@ CMD_HEAD = 0xAA
 CMD_OPEN = 0x01          # FCU -> servo advance
 CMD_TAIL = 0xFF
 
-TEST_RING = True         # True = random ring coords for testing
+SEND_RING  = True        # True = include ring data in serial frame
+TEST_RING  = False         # True = random ring coords (only when SEND_RING=True)
 # =========================================================
 
 
@@ -152,31 +153,30 @@ class RosToSerialNode(Node):
             vel_data = struct.pack("<6d", vx, vy, vz, wx, wy, wz)
 
             # ring / spot data
-            if not TEST_RING and self.latest_ring is not None:
-                rx = self.latest_ring.pose.position.x
-                ry = self.latest_ring.pose.position.y
-                rz = self.latest_ring.pose.position.z
-            elif TEST_RING:
-                rx = random.uniform(-15.0, 15.0)
-                ry = random.uniform(-15.0, 15.0)
-                rz = random.uniform(0.0, 10.0)
-            else:
-                rx = ry = rz = 0.0
-
-            spot_data = struct.pack("<3d", rx, ry, rz)
+            if SEND_RING:
+                if not TEST_RING and self.latest_ring is not None:
+                    rx = self.latest_ring.pose.position.x
+                    ry = self.latest_ring.pose.position.y
+                    rz = self.latest_ring.pose.position.z
+                elif TEST_RING:
+                    rx = random.uniform(-15.0, 15.0)
+                    ry = random.uniform(-15.0, 15.0)
+                    rz = random.uniform(0.0, 10.0)
+                else:
+                    rx = ry = rz = 0.0
+                spot_data = struct.pack("<3d", rx, ry, rz)
 
             # assemble & send
-            frame = (
-                FRAME_HEAD + POS_FLAG + pos_data +
-                VEL_FLAG + vel_data +
-                SPOT_FLAG + spot_data
-            )
+            frame = FRAME_HEAD + POS_FLAG + pos_data + VEL_FLAG + vel_data
+            if SEND_RING:
+                frame += SPOT_FLAG + spot_data
             self.ser.write(frame)
 
+            ring_str = f"ring=({rx:.1f},{ry:.1f},{rz:.1f})" if SEND_RING else "ring=OFF"
             self.get_logger().info(
                 f"TX {len(frame)}B  "
                 f"pos=({x:.2f},{y:.2f},{z:.2f}) yaw={yaw:.2f}rad  "
-                f"ring=({rx:.1f},{ry:.1f},{rz:.1f})"
+                f"{ring_str}"
             )
 
         except Exception as e:
