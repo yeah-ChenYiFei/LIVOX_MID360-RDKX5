@@ -41,8 +41,8 @@ class ShapeDetectNode : public rclcpp::Node {
 public:
     ShapeDetectNode() : Node("shape_detect_node") {
         // ── parameters ───────────────────────────────────────
-        cluster_tol_       = declare("cluster_tolerance",       0.15);
-        min_cluster_ring_  = declare("min_cluster_size_ring",   30);
+        cluster_tol_       = declare("cluster_tolerance",       0.20);
+        min_cluster_ring_  = declare("min_cluster_size_ring",   10);
         min_cluster_pillar_= declare("min_cluster_size_pillar", 80);
         max_cluster_       = declare("max_cluster_size",        8000);
 

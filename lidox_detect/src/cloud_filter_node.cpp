@@ -90,12 +90,12 @@ private:
         extract.setNegative(true);
         extract.filter(*cloud_proc);
 
-        // 4. 统计去噪
-        pcl::StatisticalOutlierRemoval<PointT> sor;
-        sor.setInputCloud(cloud_proc);
-        sor.setMeanK(30);
-        sor.setStddevMulThresh(1.0);
-        sor.filter(*cloud_proc);
+        // 4. 统计去噪（薄圆环点数稀疏，禁用 SOR 避免误删）
+        // pcl::StatisticalOutlierRemoval<PointT> sor;
+        // sor.setInputCloud(cloud_proc);
+        // sor.setMeanK(30);
+        // sor.setStddevMulThresh(1.0);
+        // sor.filter(*cloud_proc);
 
         // 转回 ROS2 消息
         sensor_msgs::msg::PointCloud2 out_msg;
