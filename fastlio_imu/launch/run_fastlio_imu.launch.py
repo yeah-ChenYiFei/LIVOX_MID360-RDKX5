@@ -65,8 +65,8 @@ def generate_launch_description():
         name='shape_detect_node',
         output='screen',
         parameters=[{
-            'cluster_tolerance': 0.15,
-            'min_cluster_size_ring': 30,
+            'cluster_tolerance': 0.20,
+            'min_cluster_size_ring': 10,
             'min_cluster_size_pillar': 80,
             'max_cluster_size': 8000,
             'ring_l2_l1_min': 0.4,

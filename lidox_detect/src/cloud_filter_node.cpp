@@ -1,5 +1,6 @@
-﻿#include <rclcpp/rclcpp.hpp>
+#include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <livox_ros_driver2/msg/custom_msg.hpp>
 
 #include <pcl/point_types.h>
 #include <pcl/point_cloud.h>
@@ -10,8 +11,7 @@
 #include <pcl/segmentation/sac_segmentation.h>
 #include <pcl/filters/extract_indices.h>
 
-// 【修改点1】：替换为 pcl_conversions 头文件
-#include <pcl_conversions/pcl_conversions.h> 
+#include <pcl_conversions/pcl_conversions.h>
 
 using PointT = pcl::PointXYZ;
 using PointCloudT = pcl::PointCloud<PointT>;
@@ -21,9 +21,9 @@ class CloudFilterNode : public rclcpp::Node
 public:
     CloudFilterNode() : Node("cloud_filter_node")
     {
-        cloud_sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
+        cloud_sub_ = this->create_subscription<livox_ros_driver2::msg::CustomMsg>(
             "/livox/lidar",
-            10,
+            rclcpp::SensorDataQoS(),
             std::bind(&CloudFilterNode::cloud_callback, this, std::placeholders::_1)
         );
 
@@ -32,24 +32,29 @@ public:
             10
         );
 
-        RCLCPP_INFO(this->get_logger(), "✅ Cloud filter node started");
+        RCLCPP_INFO(this->get_logger(), "Cloud filter node started (CustomMsg input)");
     }
 
 private:
-    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_sub_;
+    rclcpp::Subscription<livox_ros_driver2::msg::CustomMsg>::SharedPtr cloud_sub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_pub_;
 
-    void cloud_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
+    void cloud_callback(const livox_ros_driver2::msg::CustomMsg::SharedPtr msg)
     {
+        // Manually convert CustomMsg -> PCL (no pcl::fromROSMsg for CustomMsg)
         PointCloudT::Ptr cloud_raw(new PointCloudT);
-        
-        // 【修改点2】：使用 pcl::fromROSMsg
-        pcl::fromROSMsg(*msg, *cloud_raw);  
+        cloud_raw->reserve(msg->points.size());
+        for (auto &pt : msg->points) {
+            cloud_raw->push_back(PointT(pt.x, pt.y, pt.z));
+        }
+
         if (cloud_raw->empty()) return;
+
+        RCLCPP_INFO(get_logger(), "raw: %ld pts", cloud_raw->size());
 
         PointCloudT::Ptr cloud_proc(new PointCloudT);
 
-        // 1. 直通滤波
+        // 1. Passthrough
         pcl::PassThrough<PointT> pass;
         pass.setInputCloud(cloud_raw);
         pass.setFilterFieldName("x");
@@ -63,16 +68,20 @@ private:
 
         pass.setInputCloud(cloud_proc);
         pass.setFilterFieldName("z");
-        pass.setFilterLimits(0.1, 2.5);  // 圆环顶部 2.2m，留余量到 2.5m
+        pass.setFilterLimits(0.1, 2.5);
         pass.filter(*cloud_proc);
 
-        // 2. 体素降采样
+        RCLCPP_INFO(get_logger(), "after passthrough: %ld pts", cloud_proc->size());
+
+        // 2. Voxel
         pcl::VoxelGrid<PointT> vg;
         vg.setInputCloud(cloud_proc);
         vg.setLeafSize(0.02f, 0.02f, 0.02f);
         vg.filter(*cloud_proc);
 
-        // 3. RANSAC 地面分割
+        RCLCPP_INFO(get_logger(), "after voxel: %ld pts", cloud_proc->size());
+
+        // 3. RANSAC ground removal
         pcl::ModelCoefficients::Ptr plane_coeff(new pcl::ModelCoefficients);
         pcl::PointIndices::Ptr plane_inliers(new pcl::PointIndices);
 
@@ -90,19 +99,21 @@ private:
         extract.setNegative(true);
         extract.filter(*cloud_proc);
 
-        // 4. 统计去噪（薄圆环点数稀疏，禁用 SOR 避免误删）
+        RCLCPP_INFO(get_logger(), "after RANSAC: %ld pts (removed %ld ground)",
+                    cloud_proc->size(), plane_inliers->indices.size());
+
+        // 4. SOR disabled for thin ring
         // pcl::StatisticalOutlierRemoval<PointT> sor;
         // sor.setInputCloud(cloud_proc);
         // sor.setMeanK(30);
         // sor.setStddevMulThresh(1.0);
         // sor.filter(*cloud_proc);
 
-        // 转回 ROS2 消息
+        // Publish
         sensor_msgs::msg::PointCloud2 out_msg;
-        
-        // 【修改点3】：使用 pcl::toROSMsg
-        pcl::toROSMsg(*cloud_proc, out_msg);  
-        out_msg.header = msg->header;
+        pcl::toROSMsg(*cloud_proc, out_msg);
+        out_msg.header.stamp = this->now();
+        out_msg.header.frame_id = msg->header.frame_id.empty() ? "livox_frame" : msg->header.frame_id;
         cloud_pub_->publish(out_msg);
     }
 };

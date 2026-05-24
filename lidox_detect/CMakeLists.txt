@@ -9,6 +9,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(livox_ros_driver2 REQUIRED)
 find_package(pcl_ros REQUIRED)
 find_package(pcl_msgs REQUIRED)
 find_package(pcl_conversions REQUIRED)
@@ -29,6 +30,7 @@ add_executable(cloud_filter_node src/cloud_filter_node.cpp)
 ament_target_dependencies(cloud_filter_node
   rclcpp
   sensor_msgs
+  livox_ros_driver2
   pcl_ros
   pcl_msgs
   pcl_conversions
