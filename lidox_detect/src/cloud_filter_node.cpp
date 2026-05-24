@@ -113,7 +113,7 @@ private:
         sensor_msgs::msg::PointCloud2 out_msg;
         pcl::toROSMsg(*cloud_proc, out_msg);
         out_msg.header.stamp = this->now();
-        out_msg.header.frame_id = msg->header.frame_id.empty() ? "livox_frame" : msg->header.frame_id;
+        out_msg.header.frame_id = "base_link";
         cloud_pub_->publish(out_msg);
     }
 };

@@ -99,6 +99,8 @@ private:
         ec.setInputCloud(cloud);
         ec.extract(cluster_indices);
 
+        RCLCPP_INFO(get_logger(), "cloud %ld pts -> %ld clusters", cloud->size(), cluster_indices.size());
+
         // 2. classify each cluster
         for (auto &indices : cluster_indices) {
             PointCloudT::Ptr cluster(new PointCloudT);
@@ -155,25 +157,33 @@ private:
         return true;
     }
 
-    // ── publish helpers (base_link → map) ────────────────────
+    // ── publish helpers ────────────────────────────────────────
     void publish_ring(const std_msgs::msg::Header &header,
                       const Eigen::Vector4f &centroid) {
-        auto msg = transform_to_map(header, centroid);
-        if (msg) {
-            ring_pub_->publish(*msg);
-            RCLCPP_INFO(get_logger(), "Ring:  map %.2f %.2f %.2f",
-                        msg->pose.position.x, msg->pose.position.y, msg->pose.position.z);
-        }
+        geometry_msgs::msg::PoseStamped pose;
+        pose.header.stamp = now();
+        pose.header.frame_id = "base_link";
+        pose.pose.position.x = centroid.x();
+        pose.pose.position.y = centroid.y();
+        pose.pose.position.z = centroid.z();
+        pose.pose.orientation.w = 1.0;
+        ring_pub_->publish(pose);
+        RCLCPP_INFO(get_logger(), "Ring:  base_link %.2f %.2f %.2f",
+                    pose.pose.position.x, pose.pose.position.y, pose.pose.position.z);
     }
 
     void publish_pillar(const std_msgs::msg::Header &header,
                         const Eigen::Vector4f &centroid) {
-        auto msg = transform_to_map(header, centroid);
-        if (msg) {
-            pillar_pub_->publish(*msg);
-            RCLCPP_INFO(get_logger(), "Pillar: map %.2f %.2f %.2f",
-                        msg->pose.position.x, msg->pose.position.y, msg->pose.position.z);
-        }
+        geometry_msgs::msg::PoseStamped pose;
+        pose.header.stamp = now();
+        pose.header.frame_id = "base_link";
+        pose.pose.position.x = centroid.x();
+        pose.pose.position.y = centroid.y();
+        pose.pose.position.z = centroid.z();
+        pose.pose.orientation.w = 1.0;
+        pillar_pub_->publish(pose);
+        RCLCPP_INFO(get_logger(), "Pillar: base_link %.2f %.2f %.2f",
+                    pose.pose.position.x, pose.pose.position.y, pose.pose.position.z);
     }
 
     // ── TF transform ─────────────────────────────────────────
