@@ -68,7 +68,7 @@ private:
 
         pass.setInputCloud(cloud_proc);
         pass.setFilterFieldName("z");
-        pass.setFilterLimits(0.15, 1.6);  // ring bottom at ~30-40cm, top ~1.4m
+        pass.setFilterLimits(0.15, 2.5);  // ring center ~1.6m + outer radius 0.6m = top ~2.2m
         pass.filter(*cloud_proc);
 
         RCLCPP_DEBUG(get_logger(), "after passthrough: %ld pts", cloud_proc->size());
