@@ -1,107 +1,186 @@
-﻿#include "rclcpp/rclcpp.hpp"
+#include "rclcpp/rclcpp.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/twist_stamped.hpp"
 #include "sensor_msgs/msg/imu.hpp"
-#include "fastlio_imu/msg/fcu_state.hpp" 
-#include <mutex>    
+#include "fastlio_imu/msg/fcu_state.hpp"
+#include <Eigen/Core>
+#include <Eigen/Geometry>
+#include <mutex>
 
-class OdomToFCU : public rclcpp::Node { 
+class OdomToFCU : public rclcpp::Node {
 public:
-  OdomToFCU() : Node("odom_to_fcu") {
-    // 1. 订阅 Odometry
-    odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
-      "/Odometry_scpgo", 10, std::bind(&OdomToFCU::odom_callback, this, std::placeholders::_1));
-    
-    // 2. 订阅 IMU
-    imu_sub_ = this->create_subscription<sensor_msgs::msg::Imu>(
-      "/livox/imu", 10, std::bind(&OdomToFCU::imu_callback, this, std::placeholders::_1));
+    OdomToFCU() : Node("odom_to_fcu") {
+        // High-frequency raw odometry from FAST-LIO
+        odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
+            "/Odometry", 10,
+            std::bind(&OdomToFCU::odom_callback, this, std::placeholders::_1));
 
-    // 3. 初始化发布者
-    pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("/fcu/odom_pose", 10);
-    twist_pub_ = this->create_publisher<geometry_msgs::msg::TwistStamped>("/fcu/odom_twist", 10);
-    
-    // 用来转发原始 IMU
-    imu_pub_ = this->create_publisher<sensor_msgs::msg::Imu>("/fcu/imu", 10);
+        // Low-frequency optimized odometry from SC-PGO (drift correction only)
+        pgo_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
+            "/Odometry_scpgo", 10,
+            std::bind(&OdomToFCU::pgo_callback, this, std::placeholders::_1));
 
-    // 发布融合后的自定义消息
-    fcu_state_pub_ = this->create_publisher<fastlio_imu::msg::FcuState>("/fcu/state", 10);
-  }
+        imu_sub_ = this->create_subscription<sensor_msgs::msg::Imu>(
+            "/livox/imu", 10,
+            std::bind(&OdomToFCU::imu_callback, this, std::placeholders::_1));
 
-private:
-  // --- 回调函数 1：接收并缓存 IMU 数据 ---
-  void imu_callback(const sensor_msgs::msg::Imu::SharedPtr msg) {
-    // 加锁写数据（防止多线程冲突，虽然 spin 一般是单线程，但好习惯）
-    std::lock_guard<std::mutex> lock(mutex_);
-    
-    // 缓存最新的 IMU 数据
-    latest_imu_ = *msg;
-    has_imu_data_ = true;
+        pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("/fcu/odom_pose", 10);
+        twist_pub_ = this->create_publisher<geometry_msgs::msg::TwistStamped>("/fcu/odom_twist", 10);
+        imu_pub_ = this->create_publisher<sensor_msgs::msg::Imu>("/fcu/imu", 10);
+        fcu_state_pub_ = this->create_publisher<fastlio_imu::msg::FcuState>("/fcu/state", 10);
 
-    // 顺便转发原始 IMU (如果需要)
-    imu_pub_->publish(*msg);
-  }
-
-  // --- 回调函数 2：接收 Odometry 并触发融合发布 ---
-  void odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg) {
-    // 1. 先转发 Pose 和 Twist (原有功能)
-    geometry_msgs::msg::PoseStamped pose_msg;
-    pose_msg.header = msg->header;
-    pose_msg.header.frame_id = "map"; 
-    pose_msg.pose = msg->pose.pose;
-    pose_pub_->publish(pose_msg);
-
-    geometry_msgs::msg::TwistStamped twist_msg;
-    twist_msg.header = msg->header;
-    twist_msg.twist = msg->twist.twist;
-    twist_pub_->publish(twist_msg);
-
-    // 2. 核心逻辑：尝试融合数据
-    fastlio_imu::msg::FcuState fcu_msg;
-    
-    // 写入 Odometry 的信息 (位置、姿态、线速度)
-    fcu_msg.header = msg->header;
-    fcu_msg.pose = msg->pose.pose;
-    fcu_msg.twist.linear = msg->twist.twist.linear; // 线速度来自 FAST-LIO
-
-    // 写入 IMU 的信息 (角速度)
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      
-      if (has_imu_data_) {
-        // 如果已经收到了 IMU 数据，则融合
-        fcu_msg.twist.angular = latest_imu_.angular_velocity;
-        // 注意：这里的时间戳是 Odometry 的，角速度用的是最新的 IMU 值
-        // 这样做在数据延迟较小的情况下是可行的
-      } else {
-        // 如果还没收到 IMU 数据，暂时用 Odometry 自带的(可能为0)
-        fcu_msg.twist.angular = msg->twist.twist.angular;
-        RCLCPP_WARN_ONCE(this->get_logger(), "IMU data not received yet, publishing odom-only angular vel.");
-      }
+        RCLCPP_INFO(this->get_logger(),
+            "OdomToFCU: /Odometry (high-freq) + /Odometry_scpgo (drift correction)");
     }
 
-    // 3. 最终发布融合消息
-    fcu_state_pub_->publish(fcu_msg);
-  }
+private:
+    void imu_callback(const sensor_msgs::msg::Imu::SharedPtr msg) {
+        std::lock_guard<std::mutex> lock(imu_mutex_);
+        latest_imu_ = *msg;
+        has_imu_ = true;
+        imu_pub_->publish(*msg);
+    }
 
-  // --- 成员变量 ---
-  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
-  rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
+    // SC-PGO callback: compute drift correction offset (low frequency)
+    void pgo_callback(const nav_msgs::msg::Odometry::SharedPtr msg) {
+        nav_msgs::msg::Odometry raw;
+        {
+            std::lock_guard<std::mutex> lock(raw_mutex_);
+            if (!has_raw_odom_) return;
+            raw = raw_odom_;
+        }
 
-  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
-  rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr twist_pub_;
-  rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
-  rclcpp::Publisher<fastlio_imu::msg::FcuState>::SharedPtr fcu_state_pub_;
+        Eigen::Isometry3d T_raw = odomToIsometry(raw);
+        Eigen::Isometry3d T_pgo = odomToIsometry(*msg);
+        Eigen::Isometry3d corr = T_pgo * T_raw.inverse();
 
-  // 用于数据同步的缓存变量
-  sensor_msgs::msg::Imu latest_imu_; // 存储最新的 IMU 数据
-  bool has_imu_data_ = false;        // 标志位：是否收到过 IMU 数据
-  std::mutex mutex_;                 // 互斥锁，保证线程安全
+        std::lock_guard<std::mutex> lock(corr_mutex_);
+        T_correction_ = corr;
+        has_correction_ = true;
+
+        RCLCPP_DEBUG(this->get_logger(),
+            "PGO correction update: dp=(%.3f,%.3f,%.3f)",
+            corr.translation().x(), corr.translation().y(), corr.translation().z());
+    }
+
+    // Raw odometry callback: publish at full rate with drift correction applied
+    void odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg) {
+        {
+            std::lock_guard<std::mutex> lock(raw_mutex_);
+            raw_odom_ = *msg;
+            has_raw_odom_ = true;
+        }
+
+        // Apply PGO correction if available
+        nav_msgs::msg::Odometry corrected;
+        {
+            std::lock_guard<std::mutex> lock(corr_mutex_);
+            corrected = has_correction_ ? applyCorrection(*msg, T_correction_) : *msg;
+        }
+
+        // Publish pose
+        geometry_msgs::msg::PoseStamped pose_msg;
+        pose_msg.header = msg->header;
+        pose_msg.header.frame_id = "map";
+        pose_msg.pose = corrected.pose.pose;
+        pose_pub_->publish(pose_msg);
+
+        // Publish twist
+        geometry_msgs::msg::TwistStamped twist_msg;
+        twist_msg.header = msg->header;
+        twist_msg.twist = corrected.twist.twist;
+        twist_pub_->publish(twist_msg);
+
+        // Build FcuState
+        fastlio_imu::msg::FcuState fcu_msg;
+        fcu_msg.header = msg->header;
+        fcu_msg.pose = corrected.pose.pose;
+        fcu_msg.twist.linear = corrected.twist.twist.linear;
+
+        {
+            std::lock_guard<std::mutex> lock(imu_mutex_);
+            if (has_imu_) {
+                fcu_msg.twist.angular = latest_imu_.angular_velocity;
+            } else {
+                fcu_msg.twist.angular = corrected.twist.twist.angular;
+            }
+        }
+
+        fcu_state_pub_->publish(fcu_msg);
+    }
+
+    Eigen::Isometry3d odomToIsometry(const nav_msgs::msg::Odometry& msg) {
+        Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
+        T.translation() = Eigen::Vector3d(
+            msg.pose.pose.position.x,
+            msg.pose.pose.position.y,
+            msg.pose.pose.position.z);
+        T.linear() = Eigen::Quaterniond(
+            msg.pose.pose.orientation.w,
+            msg.pose.pose.orientation.x,
+            msg.pose.pose.orientation.y,
+            msg.pose.pose.orientation.z).toRotationMatrix();
+        return T;
+    }
+
+    nav_msgs::msg::Odometry applyCorrection(const nav_msgs::msg::Odometry& raw,
+                                             const Eigen::Isometry3d& T_corr) {
+        Eigen::Isometry3d T_raw = odomToIsometry(raw);
+        Eigen::Isometry3d T_out = T_corr * T_raw;
+
+        nav_msgs::msg::Odometry out = raw;
+        out.pose.pose.position.x = T_out.translation().x();
+        out.pose.pose.position.y = T_out.translation().y();
+        out.pose.pose.position.z = T_out.translation().z();
+        Eigen::Quaterniond q(T_out.rotation());
+        out.pose.pose.orientation.w = q.w();
+        out.pose.pose.orientation.x = q.x();
+        out.pose.pose.orientation.y = q.y();
+        out.pose.pose.orientation.z = q.z();
+
+        // Rotate velocity into corrected frame
+        Eigen::Vector3d v(raw.twist.twist.linear.x,
+                          raw.twist.twist.linear.y,
+                          raw.twist.twist.linear.z);
+        Eigen::Vector3d vc = T_corr.rotation() * v;
+        out.twist.twist.linear.x = vc.x();
+        out.twist.twist.linear.y = vc.y();
+        out.twist.twist.linear.z = vc.z();
+
+        return out;
+    }
+
+    // Subscriptions
+    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr pgo_sub_;
+    rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
+
+    // Publishers
+    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
+    rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr twist_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
+    rclcpp::Publisher<fastlio_imu::msg::FcuState>::SharedPtr fcu_state_pub_;
+
+    // IMU
+    sensor_msgs::msg::Imu latest_imu_;
+    bool has_imu_ = false;
+    std::mutex imu_mutex_;
+
+    // Raw odometry
+    nav_msgs::msg::Odometry raw_odom_;
+    bool has_raw_odom_ = false;
+    std::mutex raw_mutex_;
+
+    // SC-PGO correction
+    Eigen::Isometry3d T_correction_ = Eigen::Isometry3d::Identity();
+    bool has_correction_ = false;
+    std::mutex corr_mutex_;
 };
 
 int main(int argc, char **argv) {
-  rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<OdomToFCU>());
-  rclcpp::shutdown();
-  return 0;
+    rclcpp::init(argc, argv);
+    rclcpp::spin(std::make_shared<OdomToFCU>());
+    rclcpp::shutdown();
+    return 0;
 }

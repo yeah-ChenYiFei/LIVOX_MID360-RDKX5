@@ -15,6 +15,7 @@ find_package(std_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 # 只保留rclpy（运行时依赖），删除ament_cmake_python
 find_package(rclpy REQUIRED)
+find_package(Eigen3 REQUIRED)
 
 # 2. 先定义消息生成 (原有逻辑不变)
 rosidl_generate_interfaces(${PROJECT_NAME}
@@ -33,6 +34,7 @@ ament_target_dependencies(fastlio_to_fcu
   std_msgs
   sensor_msgs
 )
+target_include_directories(fastlio_to_fcu PRIVATE ${EIGEN3_INCLUDE_DIRS})
 
 # 5. 链接自定义消息生成目标 (警告不影响功能，暂时保留)
 rosidl_target_interfaces(fastlio_to_fcu
