@@ -81,7 +81,7 @@ private:
 
         RCLCPP_DEBUG(get_logger(), "after voxel: %ld pts", cloud_proc->size());
 
-        // 3. RANSAC ground removal
+        // 3. RANSAC ground removal (only if plane normal is roughly vertical)
         pcl::ModelCoefficients::Ptr plane_coeff(new pcl::ModelCoefficients);
         pcl::PointIndices::Ptr plane_inliers(new pcl::PointIndices);
 
@@ -93,14 +93,18 @@ private:
         seg.setInputCloud(cloud_proc);
         seg.segment(*plane_inliers, *plane_coeff);
 
-        pcl::ExtractIndices<PointT> extract;
-        extract.setInputCloud(cloud_proc);
-        extract.setIndices(plane_inliers);
-        extract.setNegative(true);
-        extract.filter(*cloud_proc);
-
-        RCLCPP_DEBUG(get_logger(), "after RANSAC: %ld pts (removed %ld ground)",
-                    cloud_proc->size(), plane_inliers->indices.size());
+        if (!plane_inliers->indices.empty() && plane_coeff->values.size() >= 4) {
+            float nz = std::fabs(plane_coeff->values[2]);  // z component of normal
+            if (nz > 0.7f) {  // only remove if plane is roughly horizontal
+                pcl::ExtractIndices<PointT> extract;
+                extract.setInputCloud(cloud_proc);
+                extract.setIndices(plane_inliers);
+                extract.setNegative(true);
+                extract.filter(*cloud_proc);
+                RCLCPP_DEBUG(get_logger(), "after RANSAC ground: %ld pts (removed %ld, nz=%.2f)",
+                            cloud_proc->size(), plane_inliers->indices.size(), nz);
+            }
+        }
 
         // 4. SOR disabled for thin ring
         // pcl::StatisticalOutlierRemoval<PointT> sor;
