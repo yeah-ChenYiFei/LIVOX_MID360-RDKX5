@@ -144,8 +144,8 @@ private:
 
         // PCA pre-filter: must be thin (λ3 ≪ λ1) and roughly circular (λ2 ≈ λ1)
         Eigen::Vector3f ev = sorted_eigenvalues(cluster);
-        if (ev(2) / ev(0) > 0.25f) return false;  // not thin enough (blob/wall)
-        if (ev(1) / ev(0) < 0.30f) return false;  // not circular enough (line)
+        if (ev(2) / ev(0) > 0.20f) return false;  // not thin enough (blob/wall)
+        if (ev(1) / ev(0) < 0.20f) return false;  // not circular enough (line)
 
         float best_ratio = 0;
         Eigen::Vector3f best_center(0, 0, 0);
