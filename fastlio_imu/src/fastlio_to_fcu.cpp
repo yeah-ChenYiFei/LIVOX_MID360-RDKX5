@@ -53,7 +53,6 @@ private:
 
     geometry_msgs::msg::TwistStamped twist_msg;
     twist_msg.header = msg->header;
-    twist_msg.header.frame_id = "body"; 
     twist_msg.twist = msg->twist.twist;
     twist_pub_->publish(twist_msg);
 
@@ -62,7 +61,6 @@ private:
     
     // 写入 Odometry 的信息 (位置、姿态、线速度)
     fcu_msg.header = msg->header;
-    twist_msg.header.frame_id = "xyz_position&twist"; 
     fcu_msg.pose = msg->pose.pose;
     fcu_msg.twist.linear = msg->twist.twist.linear; // 线速度来自 FAST-LIO
 

@@ -50,7 +50,7 @@ private:
 
         if (cloud_raw->empty()) return;
 
-        RCLCPP_INFO(get_logger(), "raw: %ld pts", cloud_raw->size());
+        RCLCPP_DEBUG(get_logger(), "raw: %ld pts", cloud_raw->size());
 
         PointCloudT::Ptr cloud_proc(new PointCloudT);
 
@@ -58,12 +58,12 @@ private:
         pcl::PassThrough<PointT> pass;
         pass.setInputCloud(cloud_raw);
         pass.setFilterFieldName("x");
-        pass.setFilterLimits(-6.0, 6.0);
+        pass.setFilterLimits(-1.5, 1.5);
         pass.filter(*cloud_proc);
 
         pass.setInputCloud(cloud_proc);
         pass.setFilterFieldName("y");
-        pass.setFilterLimits(-6.0, 6.0);
+        pass.setFilterLimits(-1.5, 1.5);
         pass.filter(*cloud_proc);
 
         pass.setInputCloud(cloud_proc);
@@ -71,7 +71,7 @@ private:
         pass.setFilterLimits(0.15, 1.6);  // ring bottom at ~30-40cm, top ~1.4m
         pass.filter(*cloud_proc);
 
-        RCLCPP_INFO(get_logger(), "after passthrough: %ld pts", cloud_proc->size());
+        RCLCPP_DEBUG(get_logger(), "after passthrough: %ld pts", cloud_proc->size());
 
         // 2. Voxel
         pcl::VoxelGrid<PointT> vg;
@@ -79,7 +79,7 @@ private:
         vg.setLeafSize(0.02f, 0.02f, 0.02f);
         vg.filter(*cloud_proc);
 
-        RCLCPP_INFO(get_logger(), "after voxel: %ld pts", cloud_proc->size());
+        RCLCPP_DEBUG(get_logger(), "after voxel: %ld pts", cloud_proc->size());
 
         // 3. RANSAC ground removal
         pcl::ModelCoefficients::Ptr plane_coeff(new pcl::ModelCoefficients);
@@ -99,7 +99,7 @@ private:
         extract.setNegative(true);
         extract.filter(*cloud_proc);
 
-        RCLCPP_INFO(get_logger(), "after RANSAC: %ld pts (removed %ld ground)",
+        RCLCPP_DEBUG(get_logger(), "after RANSAC: %ld pts (removed %ld ground)",
                     cloud_proc->size(), plane_inliers->indices.size());
 
         // 4. SOR disabled for thin ring

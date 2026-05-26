@@ -44,17 +44,17 @@ class ShapeDetectNode : public rclcpp::Node {
 public:
     ShapeDetectNode() : Node("shape_detect_node") {
         // ── parameters ──────────────────────────────────────
-        cluster_tol_        = declare("cluster_tolerance",        0.20);
-        min_cluster_ring_   = declare("min_cluster_size_ring",    15);
+        cluster_tol_        = declare("cluster_tolerance",        0.12);
+        min_cluster_ring_   = declare("min_cluster_size_ring",    40);
         min_cluster_pillar_ = declare("min_cluster_size_pillar",  80);
         max_cluster_        = declare("max_cluster_size",         8000);
 
         // ring – RANSAC circle2D
-        ring_fit_tol_   = declare("ring_fit_tolerance",     0.02);
-        ring_inner_r_   = declare("ring_inner_radius",      0.35);
-        ring_outer_r_   = declare("ring_outer_radius",      0.65);
-        ring_inlier_min_= declare("ring_inlier_ratio_min",  0.80);
-        ring_max_pts_   = declare("ring_max_points",        100);
+        ring_fit_tol_   = declare("ring_fit_tolerance",     0.08);
+        ring_inner_r_   = declare("ring_inner_radius",      0.40);
+        ring_outer_r_   = declare("ring_outer_radius",      0.70);
+        ring_inlier_min_= declare("ring_inlier_ratio_min",  0.45);
+        ring_max_pts_   = declare("ring_max_points",        800);
 
         // pillar – PCA
         pillar_l2l1_max_ = declare("pillar_l2_l1_max",      0.35);
@@ -97,7 +97,7 @@ private:
         ec.setInputCloud(cloud);
         ec.extract(cluster_indices);
 
-        RCLCPP_INFO(get_logger(), "cloud %ld pts -> %ld clusters",
+        RCLCPP_DEBUG(get_logger(), "cloud %ld pts -> %ld clusters",
                     cloud->size(), cluster_indices.size());
 
         std::vector<Eigen::Vector3f> frame_ring_centers;
@@ -112,6 +112,14 @@ private:
             // centroid (for pillar)
             Eigen::Vector4f centroid;
             pcl::compute3DCentroid(*cluster, centroid);
+
+            // quick PCA for cluster-level debug
+            Eigen::Vector3f ev_clu = sorted_eigenvalues(cluster);
+            RCLCPP_DEBUG(get_logger(),
+                "cluster n=%d centroid=(%.2f,%.2f,%.2f) ev=(%.3f,%.3f,%.3f) l2/l1=%.3f l3/l1=%.3f",
+                n, centroid.x(), centroid.y(), centroid.z(),
+                ev_clu(0), ev_clu(1), ev_clu(2),
+                ev_clu(1)/ev_clu(0), ev_clu(2)/ev_clu(0));
 
             // ── ring: RANSAC circle2D on 3 planes ──────
             Eigen::Vector3f ring_center;
@@ -139,13 +147,23 @@ private:
     bool is_ring(const PointCloudT::Ptr &cluster,
                  Eigen::Vector3f &center, float &radius) {
         int n = static_cast<int>(cluster->size());
-        if (n < min_cluster_ring_) return false;
-        if (n > ring_max_pts_) return false;
+        if (n < min_cluster_ring_) {
+            RCLCPP_DEBUG(get_logger(), "RING reject: n=%d < min=%d", n, min_cluster_ring_);
+            return false;
+        }
+        if (n > ring_max_pts_) {
+            RCLCPP_WARN(get_logger(), "RING reject: n=%d > max=%d", n, ring_max_pts_);
+            return false;
+        }
 
-        // PCA pre-filter: must be thin (λ3 ≪ λ1) and roughly circular (λ2 ≈ λ1)
+        // PCA pre-filter: must be thin (λ3 ≪ λ1), discard blobs/walls.
+        // Circularity check removed — RANSAC circle fit handles partial rings (1/3+ arc).
         Eigen::Vector3f ev = sorted_eigenvalues(cluster);
-        if (ev(2) / ev(0) > 0.20f) return false;  // not thin enough (blob/wall)
-        if (ev(1) / ev(0) < 0.20f) return false;  // not circular enough (line)
+        if (ev(2) / ev(0) > 0.20f) {
+            RCLCPP_WARN(get_logger(), "RING reject PCA thickness: n=%d ev=(%.4f,%.4f,%.4f) l3/l1=%.3f > 0.20",
+                        n, ev(0), ev(1), ev(2), ev(2)/ev(0));
+            return false;
+        }
 
         float best_ratio = 0;
         Eigen::Vector3f best_center(0, 0, 0);
@@ -156,7 +174,11 @@ private:
         try_plane(0, 2, 1, cluster, n, best_center, best_r, best_ratio);  // XZ
         try_plane(1, 2, 0, cluster, n, best_center, best_r, best_ratio);  // YZ
 
-        if (best_ratio < ring_inlier_min_) return false;
+        if (best_ratio < ring_inlier_min_) {
+            RCLCPP_WARN(get_logger(), "RING reject RANSAC ratio: n=%d best_r=%.3f best_ratio=%.3f < min=%.2f",
+                        n, best_r, best_ratio, ring_inlier_min_);
+            return false;
+        }
 
         center = best_center;
         radius = best_r;
@@ -167,7 +189,7 @@ private:
     void try_plane(int ax_a, int ax_b, int ax_z,
                    const PointCloudT::Ptr &cluster, int n,
                    Eigen::Vector3f &best_center, float &best_r, float &best_ratio) {
-        std::mt19937 rng(42);
+        std::mt19937 rng(std::random_device{}());
         int best_inliers = 0;
         float best_ca = 0, best_cb = 0, best_cz = 0, best_radius = 0;
 

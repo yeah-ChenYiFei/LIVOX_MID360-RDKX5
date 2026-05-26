@@ -1,7 +1,7 @@
 """
 Servo staged control via sysfs PWM.
 Protocol: advance one stage per FCU command, only forward.
-Stages: 0deg -> 40deg -> 80deg -> 115deg (3 advances total).
+Stages: 0deg -> 40deg -> 80deg -> 120deg (3 advances total).
 """
 
 import time
@@ -27,18 +27,22 @@ def init():
     """Export PWM channel, initialise to stage 0."""
     global _initialized, _current_stage
     base = _base()
-    if not os.path.exists(base):
-        with open(f"/sys/class/pwm/pwmchip{PWM_CHIP}/export", "w") as f:
-            f.write(str(PWM_CHANNEL))
-        time.sleep(0.5)
-    with open(base + "/period", "w") as f:
-        f.write(str(PERIOD_NS))
-    with open(base + "/enable", "w") as f:
-        f.write("1")
-    _initialized = True
-    _current_stage = 0
-    _write_angle(STAGES[0])
-    print(f"[servo] 初始化完成  chip{PWM_CHIP}:ch{PWM_CHANNEL}  {STAGES[0]}deg")
+    try:
+        if not os.path.exists(base):
+            with open(f"/sys/class/pwm/pwmchip{PWM_CHIP}/export", "w") as f:
+                f.write(str(PWM_CHANNEL))
+            time.sleep(0.5)
+        with open(base + "/period", "w") as f:
+            f.write(str(PERIOD_NS))
+        with open(base + "/enable", "w") as f:
+            f.write("1")
+        _initialized = True
+        _current_stage = 0
+        _write_angle(STAGES[0])
+        print(f"[servo] 初始化完成  chip{PWM_CHIP}:ch{PWM_CHANNEL}  {STAGES[0]}deg")
+    except (PermissionError, FileNotFoundError, OSError) as e:
+        print(f"[servo] 初始化失败: {e}")
+        _initialized = False
 
 
 def _write_angle(degrees: float):
@@ -46,8 +50,11 @@ def _write_angle(degrees: float):
     clamped = max(0.0, min(180.0, degrees))
     pw_us = MIN_PW_US + (MAX_PW_US - MIN_PW_US) * clamped / 180.0
     pw_ns = int(pw_us * 1000)
-    with open(_base() + "/duty_cycle", "w") as f:
-        f.write(str(pw_ns))
+    try:
+        with open(_base() + "/duty_cycle", "w") as f:
+            f.write(str(pw_ns))
+    except (PermissionError, FileNotFoundError, OSError) as e:
+        print(f"[servo] 写入duty_cycle失败: {e}")
 
 
 def set_angle(degrees: float):
@@ -81,9 +88,12 @@ def current_angle() -> int:
 
 def shutdown():
     """Disable PWM output."""
-    with open(_base() + "/enable", "w") as f:
-        f.write("0")
-    print("[servo] PWM 已关闭")
+    try:
+        with open(_base() + "/enable", "w") as f:
+            f.write("0")
+        print("[servo] PWM 已关闭")
+    except (PermissionError, FileNotFoundError, OSError) as e:
+        print(f"[servo] PWM关闭失败: {e}")
 
 
 def pwm_off():

@@ -1,5 +1,6 @@
 #!/bin/bash
 LOG_FILE="/home/sunrise/livox_ws/src/fastlio_imu/log/lidar_auto.log"
+mkdir -p "$(dirname "$LOG_FILE")"
 exec &> >(tee -a "$LOG_FILE")
 
 echo "========================================="
@@ -8,8 +9,8 @@ echo "========================================="
 
 INTERFACE="eth0"
 LIDAR_IP="192.168.1.186"
-MAX_RETRIES=10
-RETRY_DELAY=20
+MAX_RETRIES=5
+RETRY_DELAY=5
 
 # 0. 封印系统的自动NTP，防止运行中连WiFi导致时间突变崩溃
 sudo systemctl stop ntp.service 2>/dev/null
@@ -52,8 +53,8 @@ else
 fi
 
 # 等待雷达内部初始化
-echo "等待雷达内部初始化 (15秒)..."
-sleep 15
+echo "等待雷达内部初始化 (5秒)..."
+sleep 5
 
 source /opt/ros/humble/setup.bash
 source /home/sunrise/livox_ws/install/setup.bash
@@ -70,14 +71,14 @@ while true; do
 
         echo "等待驱动节点启动并注册到 ROS DDS..."
         NODE_FOUND=false
-        for ((j=1; j<=5; j++)); do
-            sleep 3
+        for ((j=1; j<=3; j++)); do
+            sleep 2
             if ros2 node list 2>/dev/null | grep -q "livox_lidar_publisher"; then
                 NODE_FOUND=true
-                echo "✅ 节点已发现 (尝试 $j/5)"
+                echo "✅ 节点已发现 (尝试 $j/3)"
                 break
             fi
-            echo "正在寻找节点... ($j/5)"
+            echo "正在寻找节点... ($j/3)"
         done
 
         if ! $NODE_FOUND; then
@@ -87,20 +88,29 @@ while true; do
             continue
         fi
 
-        MONITOR_DURATION=60
+        # 连续2次10Hz即放行
+        CONFIRM_COUNT=0
         START_TIME=$(date +%s)
+        TIMEOUT=30
         SUCCESS=false
-        while [ $(($(date +%s) - START_TIME)) -lt $MONITOR_DURATION ]; do
-            FREQ_OUTPUT=$(ros2 topic hz /livox/lidar --window 10 2>/dev/null | grep "average rate" | tail -1)
+        while [ $(($(date +%s) - START_TIME)) -lt $TIMEOUT ]; do
+            FREQ_OUTPUT=$(ros2 topic hz /livox/lidar --window 5 2>/dev/null | grep "average rate" | tail -1)
             if [[ -n "$FREQ_OUTPUT" ]]; then
                 FREQ_INT=$(echo "$FREQ_OUTPUT" | awk '{print $3}' | cut -d'.' -f1)
                 echo "当前频率: $FREQ_INT Hz"
-                if [[ "$FREQ_INT" -eq 10 ]]; then
-                    SUCCESS=true
-                    break
+                if [[ "$FREQ_INT" -ge 9 && "$FREQ_INT" -le 11 ]]; then
+                    ((CONFIRM_COUNT++))
+                    if [[ $CONFIRM_COUNT -ge 2 ]]; then
+                        SUCCESS=true
+                        break
+                    fi
+                else
+                    CONFIRM_COUNT=0
                 fi
+            else
+                CONFIRM_COUNT=0
             fi
-            sleep 3
+            sleep 2
         done
 
         if $SUCCESS; then
@@ -125,7 +135,7 @@ while true; do
         if [[ -n "$FREQ_OUTPUT" ]]; then
             FREQ_INT=$(echo "$FREQ_OUTPUT" | awk '{print $3}' | cut -d'.' -f1)
             echo "监控: 当前频率 $FREQ_INT Hz"
-            if [[ "$FREQ_INT" -eq 10 ]]; then
+            if [[ "$FREQ_INT" -ge 9 && "$FREQ_INT" -le 11 ]]; then
                 FAIL_COUNT=0
             else
                 ((FAIL_COUNT++))

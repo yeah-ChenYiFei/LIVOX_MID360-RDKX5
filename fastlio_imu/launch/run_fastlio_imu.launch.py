@@ -42,11 +42,9 @@ def generate_launch_description():
     )
 
 
-    ros_to_serial_script = os.path.join(fastlio_imu_pkg, 'src', 'ros_to_serial.py')
-
     ros_to_serial_node = Node(
-        executable='/usr/bin/python3',
-        arguments=[ros_to_serial_script],
+        package='fastlio_imu',
+        executable='ros_to_serial.py',
         name='ros_to_serial_node',
         output='screen',
     )
@@ -69,10 +67,10 @@ def generate_launch_description():
             'min_cluster_size_ring': 40,
             'min_cluster_size_pillar': 80,
             'max_cluster_size': 8000,
-            'ring_fit_tolerance': 0.05,
+            'ring_fit_tolerance': 0.08,
             'ring_inner_radius': 0.40,
-            'ring_outer_radius': 0.65,
-            'ring_inlier_ratio_min': 0.55,
+            'ring_outer_radius': 0.70,
+            'ring_inlier_ratio_min': 0.45,
             'ring_max_points': 800,
             'pillar_l2_l1_max': 0.35,
             'pillar_l1_l3_min': 8.0,

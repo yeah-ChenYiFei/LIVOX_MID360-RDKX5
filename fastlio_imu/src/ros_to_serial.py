@@ -8,7 +8,7 @@ Tx (PC -> FCU):
     Total:  1 + 1 + 32 + 1 + 48 + 1 + 12 = 96 bytes
 
 Rx (FCU -> PC):
-    AA 01 FF  — advance servo to next stage (0->40->80->115, 3 advances total)
+    AA 01 FF  — advance servo to next stage (0->40->80->120, 3 advances total)
 """
 
 import rclpy
@@ -58,6 +58,7 @@ class RosToSerialNode(Node):
         super().__init__("ros_to_serial_node")
 
         # --- serial port ---
+        self._ser_lock = threading.Lock()
         try:
             self.ser = serial.Serial(port=SERIAL_PORT, baudrate=BAUD_RATE, timeout=0.1)
             self.get_logger().info(f"串口打开: {SERIAL_PORT} @ {BAUD_RATE} bps")
@@ -98,7 +99,8 @@ class RosToSerialNode(Node):
         buf = bytearray()
         while self._recv_running:
             try:
-                data = self.ser.read(1)
+                with self._ser_lock:
+                    data = self.ser.read(1)
                 if not data:
                     continue
                 buf.append(data[0])
@@ -110,13 +112,13 @@ class RosToSerialNode(Node):
                     if buf[0] == CMD_HEAD and buf[2] == CMD_TAIL:
                         cmd = buf[1]
                         if cmd == CMD_OPEN:
-                            self.get_logger().info("[FCU] 收到投放指令 AA 01 FF")
+                            self.get_logger().debug("[FCU] 收到投放指令 AA 01 FF")
                             has_more = servo.next_stage()
                             if has_more:
-                                self.get_logger().info(
+                                self.get_logger().debug(
                                     f"[servo] 等待下次指令 (当前 {servo.current_angle()}deg)")
                             else:
-                                self.get_logger().info(
+                                self.get_logger().debug(
                                     f"[servo] 已到最终阶段 {servo.current_angle()}deg")
                         else:
                             self.get_logger().warn(f"[FCU] 未知指令: AA {cmd:02X} FF")
@@ -153,6 +155,7 @@ class RosToSerialNode(Node):
             vel_data = struct.pack("<6d", vx, vy, vz, wx, wy, wz)
 
             # ring / spot data
+            ring_zeros = False
             if SEND_RING:
                 if not TEST_RING and self.latest_ring is not None:
                     rx = self.latest_ring.pose.position.x
@@ -164,16 +167,20 @@ class RosToSerialNode(Node):
                     rz = random.uniform(0.0, 10.0)
                 else:
                     rx = ry = rz = 0.0
+                    ring_zeros = True
                 spot_data = struct.pack("<3d", rx, ry, rz)
 
             # assemble & send
             frame = FRAME_HEAD + POS_FLAG + pos_data + VEL_FLAG + vel_data
             if SEND_RING:
                 frame += SPOT_FLAG + spot_data
-            self.ser.write(frame)
+            with self._ser_lock:
+                self.ser.write(frame)
 
             ring_str = f"ring=({rx:.1f},{ry:.1f},{rz:.1f})" if SEND_RING else "ring=OFF"
-            self.get_logger().info(
+            if ring_zeros:
+                ring_str += " [WARN: no detection]"
+            self.get_logger().debug(
                 f"TX {len(frame)}B  "
                 f"pos=({x:.2f},{y:.2f},{z:.2f}) yaw={yaw:.2f}rad  "
                 f"{ring_str}"
