@@ -1024,20 +1024,23 @@ private:
             flg_EKF_inited = (Measures.lidar_beg_time - first_lidar_time) < INIT_TIME ? \
                             false : true;
 
-            // --- divergence guard: reset only when EKF position explodes ---
-            // Normal operation never exceeds field bounds; 100m = certain divergence.
-            static constexpr double MAX_SAFE_POS = 100.0;
-            static constexpr int    MAX_CONSEC_FAILURES = 50;  // warn only
-            if (consecutive_icp_failures > MAX_CONSEC_FAILURES && state_point.pos.norm() > MAX_SAFE_POS)
-            {
-                std::cerr << "[reset] EKF diverged (pos=" << state_point.pos.norm()
-                          << "m, icp_fail=" << consecutive_icp_failures
-                          << "), clearing map and reinitializing" << std::endl;
-                ikdtree.clear();
-                first_lidar_time = Measures.lidar_beg_time;
-                consecutive_icp_failures = 0;
+            // --- sanity check: skip frame if any point has extreme coords (prevents VoxelGrid overflow) ---
+            bool bad_scan = false;
+            for (size_t i = 0; i < feats_undistort->size(); i++) {
+                const auto &p = feats_undistort->points[i];
+                if (fabs(p.x) > 1e4f || fabs(p.y) > 1e4f || fabs(p.z) > 1e4f) {
+                    bad_scan = true;
+                    break;
+                }
+            }
+            if (bad_scan) {
+                std::cerr << "[skip] extreme point coords in scan, skipping frame to avoid VoxelGrid overflow" << std::endl;
+                consecutive_icp_failures++;
                 return;
             }
+
+            // --- warn on persistent ICP failures ---
+            static constexpr int MAX_CONSEC_FAILURES = 50;
             if (consecutive_icp_failures == MAX_CONSEC_FAILURES) {
                 std::cerr << "[warn] " << MAX_CONSEC_FAILURES
                           << " consecutive ICP failures, pos=" << state_point.pos.norm() << "m" << std::endl;
