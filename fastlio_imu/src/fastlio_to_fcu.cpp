@@ -79,38 +79,57 @@ private:
             corrected = has_correction_ ? applyCorrection(*msg, T_correction_) : *msg;
         }
 
-        // --- position jump watchdog ---
-        double dx = corrected.pose.pose.position.x - last_valid_pose_.position.x;
-        double dy = corrected.pose.pose.position.y - last_valid_pose_.position.y;
-        double dz = corrected.pose.pose.position.z - last_valid_pose_.position.z;
-        double jump = std::sqrt(dx*dx + dy*dy + dz*dz);
-
-        static constexpr double MAX_JUMP_PER_FRAME = 1.0;  // reject >1m/frame glitch
-        if (has_valid_pose_ && jump > MAX_JUMP_PER_FRAME) {
-            corrected.pose.pose.position = last_valid_pose_.position;
-            corrected.pose.pose.orientation = last_valid_pose_.orientation;
-            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
-                "Rejected jump %.2fm, keeping last valid pose", jump);
-        } else {
-            last_valid_pose_.position = corrected.pose.pose.position;
-            last_valid_pose_.orientation = corrected.pose.pose.orientation;
-            has_valid_pose_ = true;
-        }
-
-        // --- velocity watchdog ---
+        // --- compute speed (used by both watchdogs) ---
         double lvx = corrected.twist.twist.linear.x;
         double lvy = corrected.twist.twist.linear.y;
         double lvz = corrected.twist.twist.linear.z;
         double speed = std::sqrt(lvx*lvx + lvy*lvy + lvz*lvz);
 
-        static constexpr double MAX_SPEED = 5.0;  // reject >5m/s glitch (drone physically impossible)
+        // --- velocity watchdog: reject physically impossible speeds ---
+        static constexpr double MAX_SPEED = 5.0;
         if (has_valid_twist_ && speed > MAX_SPEED) {
             corrected.twist.twist = last_valid_twist_;
+            lvx = corrected.twist.twist.linear.x;
+            lvy = corrected.twist.twist.linear.y;
+            lvz = corrected.twist.twist.linear.z;
+            speed = std::sqrt(lvx*lvx + lvy*lvy + lvz*lvz);
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
                 "Rejected speed %.1fm/s, keeping last valid twist", speed);
         } else {
             last_valid_twist_ = corrected.twist.twist;
             has_valid_twist_ = true;
+        }
+
+        // --- stationary detection for adaptive position watchdog ---
+        static constexpr double STATIONARY_SPEED = 0.05;
+        static constexpr int    STATIONARY_FRAMES = 5;
+        static constexpr double JUMP_FLYING      = 1.0;
+        static constexpr double JUMP_STATIONARY  = 0.15;
+
+        if (speed < STATIONARY_SPEED) {
+            stationary_cnt_++;
+        } else {
+            stationary_cnt_ = 0;
+        }
+        bool is_stationary = (stationary_cnt_ >= STATIONARY_FRAMES);
+        double max_jump = is_stationary ? JUMP_STATIONARY : JUMP_FLYING;
+
+        // --- position jump watchdog (adaptive) ---
+        double dx = corrected.pose.pose.position.x - last_valid_pose_.position.x;
+        double dy = corrected.pose.pose.position.y - last_valid_pose_.position.y;
+        double dz = corrected.pose.pose.position.z - last_valid_pose_.position.z;
+        double jump = std::sqrt(dx*dx + dy*dy + dz*dz);
+
+        if (has_valid_pose_ && jump > max_jump) {
+            corrected.pose.pose.position = last_valid_pose_.position;
+            corrected.pose.pose.orientation = last_valid_pose_.orientation;
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                "Rejected jump %.3fm (>%.3f %s), keeping last valid pose",
+                jump, max_jump, is_stationary ? "stationary" : "flying");
+        } else {
+            last_valid_pose_.position = corrected.pose.pose.position;
+            last_valid_pose_.orientation = corrected.pose.pose.orientation;
+            has_valid_pose_ = true;
         }
 
         // Publish pose
@@ -214,6 +233,7 @@ private:
     // Position jump watchdog
     bool has_valid_pose_ = false;
     geometry_msgs::msg::Pose last_valid_pose_;
+    int stationary_cnt_ = 0;
 
     // Velocity watchdog
     bool has_valid_twist_ = false;
