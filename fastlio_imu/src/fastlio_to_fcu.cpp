@@ -79,6 +79,24 @@ private:
             corrected = has_correction_ ? applyCorrection(*msg, T_correction_) : *msg;
         }
 
+        // --- position jump watchdog ---
+        double dx = corrected.pose.pose.position.x - last_valid_pose_.position.x;
+        double dy = corrected.pose.pose.position.y - last_valid_pose_.position.y;
+        double dz = corrected.pose.pose.position.z - last_valid_pose_.position.z;
+        double jump = std::sqrt(dx*dx + dy*dy + dz*dz);
+
+        static constexpr double MAX_JUMP_PER_FRAME = 1.0;  // reject >1m/frame glitch
+        if (has_valid_pose_ && jump > MAX_JUMP_PER_FRAME) {
+            corrected.pose.pose.position = last_valid_pose_.position;
+            corrected.pose.pose.orientation = last_valid_pose_.orientation;
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                "Rejected jump %.2fm, keeping last valid pose", jump);
+        } else {
+            last_valid_pose_.position = corrected.pose.pose.position;
+            last_valid_pose_.orientation = corrected.pose.pose.orientation;
+            has_valid_pose_ = true;
+        }
+
         // Publish pose
         geometry_msgs::msg::PoseStamped pose_msg;
         pose_msg.header = msg->header;
@@ -176,6 +194,10 @@ private:
     Eigen::Isometry3d T_correction_ = Eigen::Isometry3d::Identity();
     bool has_correction_ = false;
     std::mutex corr_mutex_;
+
+    // Position jump watchdog
+    bool has_valid_pose_ = false;
+    geometry_msgs::msg::Pose last_valid_pose_;
 };
 
 int main(int argc, char **argv) {
