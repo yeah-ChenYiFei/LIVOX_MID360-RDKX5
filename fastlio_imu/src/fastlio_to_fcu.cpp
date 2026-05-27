@@ -97,6 +97,22 @@ private:
             has_valid_pose_ = true;
         }
 
+        // --- velocity watchdog ---
+        double lvx = corrected.twist.twist.linear.x;
+        double lvy = corrected.twist.twist.linear.y;
+        double lvz = corrected.twist.twist.linear.z;
+        double speed = std::sqrt(lvx*lvx + lvy*lvy + lvz*lvz);
+
+        static constexpr double MAX_SPEED = 5.0;  // reject >5m/s glitch (drone physically impossible)
+        if (has_valid_twist_ && speed > MAX_SPEED) {
+            corrected.twist.twist = last_valid_twist_;
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                "Rejected speed %.1fm/s, keeping last valid twist", speed);
+        } else {
+            last_valid_twist_ = corrected.twist.twist;
+            has_valid_twist_ = true;
+        }
+
         // Publish pose
         geometry_msgs::msg::PoseStamped pose_msg;
         pose_msg.header = msg->header;
@@ -198,6 +214,10 @@ private:
     // Position jump watchdog
     bool has_valid_pose_ = false;
     geometry_msgs::msg::Pose last_valid_pose_;
+
+    // Velocity watchdog
+    bool has_valid_twist_ = false;
+    geometry_msgs::msg::Twist last_valid_twist_;
 };
 
 int main(int argc, char **argv) {
