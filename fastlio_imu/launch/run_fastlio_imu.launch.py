@@ -54,7 +54,28 @@ def generate_launch_description():
         package='lidox_detect',
         executable='cloud_filter_node',
         name='cloud_filter_node',
-        output='screen'
+        output='screen',
+        parameters=[{
+            # XY: focus on ring ~1m ahead, narrow lateral window
+            'x_min': 0.0,
+            'x_max': 1.8,
+            'y_min': -0.7,
+            'y_max': 0.7,
+            # Z: full ring vertical span (drone at any reasonable height)
+            'z_min': -0.6,
+            'z_max': 1.5,
+            # voxel
+            'voxel_leaf': 0.02,
+            # SOR: remove sparse mesh points, keep dense ring surface
+            'sor_enabled': True,
+            'sor_mean_k': 20,
+            'sor_stddev': 1.0,
+            # RANSAC
+            'ransac_dist_thresh': 0.03,
+            'ransac_ground_nz_min': 0.7,
+            'ransac_wall_min_ratio': 0.30,
+            'wall_removal_enabled': True,
+        }]
     )
 
     shape_detect_node = Node(
