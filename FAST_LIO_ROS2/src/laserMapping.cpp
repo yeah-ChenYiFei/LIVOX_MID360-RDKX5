@@ -643,14 +643,23 @@ void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPt
     Eigen::Matrix3d R_world_to_body = state_est.rot.inverse().toRotationMatrix();
     Eigen::Vector3d vel_body = R_world_to_body * vel_world;
 
+    // Guard: when ICP fails repeatedly, EKF velocity diverges from
+    // IMU-only integration.  No real drone exceeds 5 m/s indoors.
+    static constexpr double MAX_REALISTIC_SPEED = 5.0;
+    if (vel_body.norm() > MAX_REALISTIC_SPEED) {
+        vel_body.setZero();
+        static int warn_cnt = 0;
+        if (++warn_cnt % 10 == 1) {
+            std::cerr << "[odom] velocity diverged, zeroing (warn #" << warn_cnt << ")" << std::endl;
+        }
+    }
+
     odomAftMapped.twist.twist.linear.x = vel_body(0);
     odomAftMapped.twist.twist.linear.y = vel_body(1);
     odomAftMapped.twist.twist.linear.z = vel_body(2);
 
     // 3. 设置角速度
-    // 由于在这个函数里不方便直接拿到最新的原始 IMU 数据并减去零偏，
-    // 且 PX4 飞控主要依赖线速度进行位置控制，角速度可以暂设为 0。
-    // PX4 会利用自身的 IMU 数据补充角速度信息。
+    // PX4 relies on its own IMU for angular velocity; set to 0 here.
     odomAftMapped.twist.twist.angular.x = 0;
     odomAftMapped.twist.twist.angular.y = 0;
     odomAftMapped.twist.twist.angular.z = 0;
