@@ -25,13 +25,19 @@ public:
             "/livox/imu", 10,
             std::bind(&OdomToFCU::imu_callback, this, std::placeholders::_1));
 
+        // Ring detection (base_link frame) → transform to world frame
+        ring_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
+            "/lidox/ring_center", 10,
+            std::bind(&OdomToFCU::ring_callback, this, std::placeholders::_1));
+
         pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("/fcu/odom_pose", 10);
         twist_pub_ = this->create_publisher<geometry_msgs::msg::TwistStamped>("/fcu/odom_twist", 10);
         imu_pub_ = this->create_publisher<sensor_msgs::msg::Imu>("/fcu/imu", 10);
         fcu_state_pub_ = this->create_publisher<fastlio_imu::msg::FcuState>("/fcu/state", 10);
+        ring_world_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("/fcu/ring_world", 10);
 
         RCLCPP_INFO(this->get_logger(),
-            "OdomToFCU: /Odometry (high-freq) + /Odometry_scpgo (drift correction)");
+            "OdomToFCU: /Odometry + /Odometry_scpgo + /lidox/ring_center → ring_world");
     }
 
 private:
@@ -40,6 +46,14 @@ private:
         latest_imu_ = *msg;
         has_imu_ = true;
         imu_pub_->publish(*msg);
+    }
+
+    // Ring detection callback: store latest (base_link frame)
+    void ring_callback(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
+        std::lock_guard<std::mutex> lock(ring_mutex_);
+        latest_ring_ = *msg;
+        has_ring_ = true;
+        last_ring_time_ = this->now().seconds();
     }
 
     // SC-PGO callback: compute drift correction offset (low frequency)
@@ -132,6 +146,10 @@ private:
             has_valid_pose_ = true;
         }
 
+        // --- ring_world transform: base_link → world frame ---
+        geometry_msgs::msg::Pose ring_world;
+        update_ring_world(corrected, ring_world);
+
         // Publish pose
         geometry_msgs::msg::PoseStamped pose_msg;
         pose_msg.header = msg->header;
@@ -150,6 +168,7 @@ private:
         fcu_msg.header = msg->header;
         fcu_msg.pose = corrected.pose.pose;
         fcu_msg.twist.linear = corrected.twist.twist.linear;
+        fcu_msg.ring_world = ring_world;
 
         {
             std::lock_guard<std::mutex> lock(imu_mutex_);
@@ -161,6 +180,75 @@ private:
         }
 
         fcu_state_pub_->publish(fcu_msg);
+    }
+
+    // ── ring_world transform with EMA filter + near-field lock ──
+    void update_ring_world(const nav_msgs::msg::Odometry& odom,
+                           geometry_msgs::msg::Pose& ring_world_out) {
+        static constexpr double LOCK_DISTANCE   = 0.8;   // lock when this close
+        static constexpr double UNLOCK_DISTANCE = 2.0;   // unlock when this far
+        static constexpr double EMA_ALPHA       = 0.3;   // exponential moving average
+        static constexpr double RING_TIMEOUT    = 1.0;   // seconds without detection
+
+        geometry_msgs::msg::PoseStamped ring_bl;
+        {
+            std::lock_guard<std::mutex> lock(ring_mutex_);
+            if (!has_ring_) {
+                ring_world_out = ring_ema_;
+                return;
+            }
+            ring_bl = latest_ring_;
+        }
+
+        double now = this->now().seconds();
+        bool detection_fresh = (now - last_ring_time_) < RING_TIMEOUT;
+
+        // Transform base_link → world: ring_world = T_odom × ring_base_link
+        Eigen::Isometry3d T_odom = odomToIsometry(odom);
+        Eigen::Vector3d ring_bl_vec(
+            ring_bl.pose.position.x,
+            ring_bl.pose.position.y,
+            ring_bl.pose.position.z);
+        Eigen::Vector3d ring_world_vec = T_odom * ring_bl_vec;
+
+        double dist_to_ring = ring_bl_vec.norm();
+
+        if (!ring_locked_ && detection_fresh && dist_to_ring < LOCK_DISTANCE) {
+            ring_locked_ = true;
+            ring_lock_pos_ = ring_world_vec;
+            RCLCPP_INFO(this->get_logger(),
+                "Ring locked at world (%.2f,%.2f,%.2f) dist=%.2fm",
+                ring_lock_pos_.x(), ring_lock_pos_.y(), ring_lock_pos_.z(), dist_to_ring);
+        }
+
+        if (ring_locked_) {
+            double lock_drift = (ring_world_vec - ring_lock_pos_).norm();
+            if (lock_drift > UNLOCK_DISTANCE) {
+                ring_locked_ = false;
+                RCLCPP_INFO(this->get_logger(), "Ring unlocked (drift %.2fm)", lock_drift);
+            }
+        }
+
+        if (ring_locked_) {
+            // Hold locked position (with EMA for tiny refinements)
+            ring_ema_ = ring_lock_pos_ * EMA_ALPHA + ring_ema_ * (1.0 - EMA_ALPHA);
+        } else if (detection_fresh) {
+            // Normal EMA filtering
+            ring_ema_ = ring_world_vec * EMA_ALPHA + ring_ema_ * (1.0 - EMA_ALPHA);
+        }
+        // else: keep last EMA value (detection lost, not locked)
+
+        ring_world_out.position.x = ring_ema_.x();
+        ring_world_out.position.y = ring_ema_.y();
+        ring_world_out.position.z = ring_ema_.z();
+        ring_world_out.orientation.w = 1.0;
+
+        // Publish ring_world for RViz2 debug
+        geometry_msgs::msg::PoseStamped rw_msg;
+        rw_msg.header.stamp = this->now();
+        rw_msg.header.frame_id = "map";
+        rw_msg.pose = ring_world_out;
+        ring_world_pub_->publish(rw_msg);
     }
 
     Eigen::Isometry3d odomToIsometry(const nav_msgs::msg::Odometry& msg) {
@@ -208,12 +296,14 @@ private:
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr pgo_sub_;
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
+    rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr ring_sub_;
 
     // Publishers
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
     rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr twist_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
     rclcpp::Publisher<fastlio_imu::msg::FcuState>::SharedPtr fcu_state_pub_;
+    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr ring_world_pub_;
 
     // IMU
     sensor_msgs::msg::Imu latest_imu_;
@@ -238,6 +328,16 @@ private:
     // Velocity watchdog
     bool has_valid_twist_ = false;
     geometry_msgs::msg::Twist last_valid_twist_;
+
+    // Ring detection → world transform
+    geometry_msgs::msg::PoseStamped latest_ring_;
+    bool has_ring_ = false;
+    double last_ring_time_ = 0.0;
+    std::mutex ring_mutex_;
+
+    Eigen::Vector3d ring_ema_ = Eigen::Vector3d::Zero();
+    bool ring_locked_ = false;
+    Eigen::Vector3d ring_lock_pos_ = Eigen::Vector3d::Zero();
 };
 
 int main(int argc, char **argv) {

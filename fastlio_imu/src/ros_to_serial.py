@@ -14,7 +14,6 @@ Rx (FCU -> PC):
 import rclpy
 from rclpy.node import Node
 from fastlio_imu.msg import FcuState
-from geometry_msgs.msg import PoseStamped
 import serial
 import struct
 import math
@@ -42,7 +41,7 @@ CMD_OPEN = 0x01          # FCU -> servo advance
 CMD_TAIL = 0xFF
 
 SEND_RING  = True        # True = include ring data in serial frame
-TEST_RING  = False         # True = random ring coords (only when SEND_RING=True)
+TEST_RING  = False       # True = random ring coords (only when SEND_RING=True)
 # =========================================================
 
 
@@ -70,10 +69,6 @@ class RosToSerialNode(Node):
         self.subscription = self.create_subscription(
             FcuState, TOPIC_NAME, self._on_fcu_state, 10)
 
-        self.ring_sub = self.create_subscription(
-            PoseStamped, "/lidox/ring_center", self._on_ring, 10)
-
-        self.latest_ring = None
         self._recv_running = True
 
         # --- servo ---
@@ -85,14 +80,10 @@ class RosToSerialNode(Node):
         self._recv_thread.start()
 
         self.get_logger().info(
-            f"订阅: {TOPIC_NAME} + /lidox/ring_center  |  "
-            f"环数据: {'随机测试' if TEST_RING else '真实检测'}  |  "
+            f"订阅: {TOPIC_NAME}  |  "
+            f"环数据: {'随机测试' if TEST_RING else '世界系(world frame)'}  |  "
             f"串口接收已启动"
         )
-
-    # ---- ring callback ----
-    def _on_ring(self, msg: PoseStamped):
-        self.latest_ring = msg
 
     # ---- FCU -> PC receive thread ----
     def _serial_recv_loop(self):
@@ -154,17 +145,19 @@ class RosToSerialNode(Node):
             # pack velocity (6 doubles, little-endian)
             vel_data = struct.pack("<6d", vx, vy, vz, wx, wy, wz)
 
-            # ring / spot data
+            # ring / spot data (world frame, origin = takeoff point)
             ring_zeros = False
             if SEND_RING:
-                if not TEST_RING and self.latest_ring is not None:
-                    rx = self.latest_ring.pose.position.x
-                    ry = self.latest_ring.pose.position.y
-                    rz = self.latest_ring.pose.position.z
+                if not TEST_RING:
+                    rx = msg.ring_world.position.x
+                    ry = msg.ring_world.position.y
+                    rz = msg.ring_world.position.z
+                    ring_zeros = (rx == 0.0 and ry == 0.0 and rz == 0.0)
                 elif TEST_RING:
                     rx = random.uniform(-15.0, 15.0)
                     ry = random.uniform(-15.0, 15.0)
                     rz = random.uniform(0.0, 10.0)
+                    ring_zeros = False
                 else:
                     rx = ry = rz = 0.0
                     ring_zeros = True
