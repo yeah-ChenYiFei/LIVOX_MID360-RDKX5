@@ -96,6 +96,7 @@ int    effct_feat_num = 0, time_log_counter = 0, scan_count = 0, publish_count =
 int    iterCount = 0, feats_down_size = 0, NUM_MAX_ITERATIONS = 0, laserCloudValidNum = 0, pcd_save_interval = -1, pcd_index = 0;
 bool   point_selected_surf[100000] = {0};
 bool   lidar_pushed, flg_first_scan = true, flg_exit = false, flg_EKF_inited;
+int    consecutive_icp_failures = 0;
 bool   scan_pub_en = false, dense_pub_en = false, scan_body_pub_en = false;
 bool    is_first_lidar = true;
 
@@ -780,10 +781,11 @@ void h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_
     if (effct_feat_num < 1)
     {
         ekfom_data.valid = false;
-        std::cerr << "No Effective Points!" << std::endl;
-        // ROS_WARN("No Effective Points! \n");
+        consecutive_icp_failures++;
+        std::cerr << "No Effective Points! (fail #" << consecutive_icp_failures << ")" << std::endl;
         return;
     }
+    consecutive_icp_failures = 0;
 
     res_mean_last = total_residual / effct_feat_num;
     match_time  += omp_get_wtime() - match_start;
@@ -1021,6 +1023,21 @@ private:
 
             flg_EKF_inited = (Measures.lidar_beg_time - first_lidar_time) < INIT_TIME ? \
                             false : true;
+
+            // --- divergence guard: reset when EKF drifts beyond reasonable bounds ---
+            static constexpr double MAX_SAFE_POS = 100.0;
+            static constexpr int    MAX_CONSEC_FAILURES = 50;  // 5s at 10Hz
+            if (state_point.pos.norm() > MAX_SAFE_POS || consecutive_icp_failures > MAX_CONSEC_FAILURES)
+            {
+                std::cerr << "[reset] EKF diverged (pos=" << state_point.pos.norm()
+                          << "m, icp_fail=" << consecutive_icp_failures
+                          << "), clearing map and reinitializing" << std::endl;
+                ikdtree.clear();
+                first_lidar_time = Measures.lidar_beg_time;
+                consecutive_icp_failures = 0;
+                return;
+            }
+
             /*** Segment the map in lidar FOV ***/
             lasermap_fov_segment();
 
