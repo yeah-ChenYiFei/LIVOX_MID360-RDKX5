@@ -63,7 +63,7 @@
 #include "preprocess.h"
 #include <ikd-Tree/ikd_Tree.h>
 
-#define INIT_TIME           (0.1)
+#define INIT_TIME           (2.0)  // 2s for MID360 non-repetitive scan to cover full FOV
 #define LASER_POINT_COV     (0.001)
 #define MAXN                (720000)
 #define PUBFRAME_PERIOD     (20)
