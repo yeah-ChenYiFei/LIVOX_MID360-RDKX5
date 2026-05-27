@@ -1024,10 +1024,11 @@ private:
             flg_EKF_inited = (Measures.lidar_beg_time - first_lidar_time) < INIT_TIME ? \
                             false : true;
 
-            // --- divergence guard: reset when EKF drifts beyond reasonable bounds ---
+            // --- divergence guard: reset only when EKF position explodes ---
+            // Normal operation never exceeds field bounds; 100m = certain divergence.
             static constexpr double MAX_SAFE_POS = 100.0;
-            static constexpr int    MAX_CONSEC_FAILURES = 50;  // 5s at 10Hz
-            if (state_point.pos.norm() > MAX_SAFE_POS || consecutive_icp_failures > MAX_CONSEC_FAILURES)
+            static constexpr int    MAX_CONSEC_FAILURES = 50;  // warn only
+            if (consecutive_icp_failures > MAX_CONSEC_FAILURES && state_point.pos.norm() > MAX_SAFE_POS)
             {
                 std::cerr << "[reset] EKF diverged (pos=" << state_point.pos.norm()
                           << "m, icp_fail=" << consecutive_icp_failures
@@ -1036,6 +1037,10 @@ private:
                 first_lidar_time = Measures.lidar_beg_time;
                 consecutive_icp_failures = 0;
                 return;
+            }
+            if (consecutive_icp_failures == MAX_CONSEC_FAILURES) {
+                std::cerr << "[warn] " << MAX_CONSEC_FAILURES
+                          << " consecutive ICP failures, pos=" << state_point.pos.norm() << "m" << std::endl;
             }
 
             /*** Segment the map in lidar FOV ***/
