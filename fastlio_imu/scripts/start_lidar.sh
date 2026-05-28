@@ -53,8 +53,8 @@ else
 fi
 
 # 等待雷达内部初始化
-echo "等待雷达内部初始化 (5秒)..."
-sleep 5
+echo "等待雷达内部初始化 (15秒)..."
+sleep 15
 
 source /opt/ros/humble/setup.bash
 source /home/sunrise/livox_ws/install/setup.bash
@@ -91,7 +91,7 @@ while true; do
         # 连续2次10Hz即放行
         CONFIRM_COUNT=0
         START_TIME=$(date +%s)
-        TIMEOUT=30
+        TIMEOUT=60
         SUCCESS=false
         while [ $(($(date +%s) - START_TIME)) -lt $TIMEOUT ]; do
             FREQ_OUTPUT=$(ros2 topic hz /livox/lidar --window 5 2>/dev/null | grep "average rate" | tail -1)
