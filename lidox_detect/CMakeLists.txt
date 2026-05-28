@@ -15,6 +15,7 @@ find_package(pcl_msgs REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
 find_package(PCL REQUIRED)
 
 include_directories(
@@ -44,6 +45,7 @@ add_executable(shape_detect_node src/shape_detect_node.cpp)
 ament_target_dependencies(shape_detect_node
   rclcpp
   sensor_msgs
+  nav_msgs
   pcl_ros
   pcl_msgs
   pcl_conversions

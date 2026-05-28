@@ -1,13 +1,16 @@
 /**
- * shape_detect_node — ring (RANSAC circle2D) + pillar (PCA) detector.
+ * shape_detect_node — ring (RANSAC circle2D) + pillar (PCA) detector
+ * with multi-frame point cloud accumulation via odometry.
  *
- * Subscribes: /lidox/filtered_cloud
- * Publishes:  /lidox/ring_center   (PoseStamped, base_link)
- *             /lidox/pillar_center (PoseStamped, base_link)
+ * Subscribes: /lidox/filtered_cloud  (PointCloud2, base_link)
+ *             /Odometry              (Odometry)
+ * Publishes:  /lidox/ring_center     (PoseStamped, base_link)
+ *             /lidox/pillar_center   (PoseStamped, base_link)
  */
 
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <nav_msgs/msg/odometry.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 
 #include <pcl/point_types.h>
@@ -15,11 +18,27 @@
 #include <pcl_conversions/pcl_conversions.h>
 
 #include <pcl/segmentation/extract_clusters.h>
+#include <pcl/filters/voxel_grid.h>
 #include <pcl/common/pca.h>
 #include <pcl/common/centroid.h>
+#include <pcl/common/transforms.h>
+
+#include <Eigen/Geometry>
 
 #include <random>
 #include <algorithm>
+#include <deque>
+#include <mutex>
+
+using PointT = pcl::PointXYZ;
+using PointCloudT = pcl::PointCloud<PointT>;
+
+// ── multi-frame accumulation ──────────────────────────
+struct CloudFrame {
+    PointCloudT::Ptr cloud;
+    Eigen::Isometry3d pose;   // T_world_base at this frame
+    double stamp;
+};
 
 // Temporal consistency tracking
 struct TrackedRing {
@@ -27,9 +46,6 @@ struct TrackedRing {
     int hits = 0;
     int misses = 0;
 };
-
-using PointT = pcl::PointXYZ;
-using PointCloudT = pcl::PointCloud<PointT>;
 
 static Eigen::Vector3f sorted_eigenvalues(const PointCloudT::Ptr &cloud) {
     pcl::PCA<PointT> pca;
@@ -43,34 +59,44 @@ static Eigen::Vector3f sorted_eigenvalues(const PointCloudT::Ptr &cloud) {
 class ShapeDetectNode : public rclcpp::Node {
 public:
     ShapeDetectNode() : Node("shape_detect_node") {
-        // ── parameters ──────────────────────────────────────
-        cluster_tol_        = declare("cluster_tolerance",        0.12);
-        min_cluster_ring_   = declare("min_cluster_size_ring",    40);
-        min_cluster_pillar_ = declare("min_cluster_size_pillar",  80);
-        max_cluster_        = declare("max_cluster_size",         8000);
+        // ── cluster parameters ──────────────────────────
+        cluster_tol_         = declare("cluster_tolerance",        0.12);
+        min_cluster_ring_    = declare("min_cluster_size_ring",    40);
+        min_cluster_pillar_  = declare("min_cluster_size_pillar",  80);
+        max_cluster_         = declare("max_cluster_size",         8000);
 
-        // ring – RANSAC circle2D
-        ring_fit_tol_   = declare("ring_fit_tolerance",     0.08);
-        ring_inner_r_   = declare("ring_inner_radius",      0.40);
-        ring_outer_r_   = declare("ring_outer_radius",      0.70);
-        ring_inlier_min_= declare("ring_inlier_ratio_min",  0.45);
-        ring_max_pts_   = declare("ring_max_points",        800);
+        // ── ring: RANSAC circle2D ────────────────────────
+        ring_fit_tol_    = declare("ring_fit_tolerance",     0.08);
+        ring_inner_r_    = declare("ring_inner_radius",      0.40);
+        ring_outer_r_    = declare("ring_outer_radius",      0.70);
+        ring_inlier_min_ = declare("ring_inlier_ratio_min",  0.45);
+        ring_max_pts_    = declare("ring_max_points",        800);
 
-        // pillar – PCA
+        // ── pillar: PCA ──────────────────────────────────
         pillar_l2l1_max_ = declare("pillar_l2_l1_max",      0.35);
         pillar_l1l3_min_ = declare("pillar_l1_l3_min",      8.0);
 
-        // ── pub / sub ──────────────────────────────────────
+        // ── multi-frame accumulation ────────────────────
+        accumulate_window_ = declare("accumulate_window",   1.5);
+        accumulate_voxel_  = declare("accumulate_voxel",    0.02);
+
+        // ── pub / sub ────────────────────────────────────
         cloud_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
             "/lidox/filtered_cloud", rclcpp::SensorDataQoS(),
             std::bind(&ShapeDetectNode::on_cloud, this, std::placeholders::_1));
+
+        odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
+            "/Odometry", 10,
+            std::bind(&ShapeDetectNode::on_odom, this, std::placeholders::_1));
 
         ring_pub_   = create_publisher<geometry_msgs::msg::PoseStamped>(
             "/lidox/ring_center", 10);
         pillar_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>(
             "/lidox/pillar_center", 10);
 
-        RCLCPP_INFO(get_logger(), "ShapeDetectNode started (RANSAC circle2D ring + PCA pillar)");
+        RCLCPP_INFO(get_logger(),
+            "ShapeDetectNode: multi-frame acc window=%.1fs voxel=%.2f",
+            accumulate_window_, accumulate_voxel_);
     }
 
 private:
@@ -79,11 +105,88 @@ private:
         return declare_parameter<T>(name, default_val);
     }
 
+    // ── odometry ────────────────────────────────────
+    void on_odom(const nav_msgs::msg::Odometry::SharedPtr msg) {
+        Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
+        T.translation() = Eigen::Vector3d(
+            msg->pose.pose.position.x,
+            msg->pose.pose.position.y,
+            msg->pose.pose.position.z);
+        T.linear() = Eigen::Quaterniond(
+            msg->pose.pose.orientation.w,
+            msg->pose.pose.orientation.x,
+            msg->pose.pose.orientation.y,
+            msg->pose.pose.orientation.z).toRotationMatrix();
+
+        std::lock_guard<std::mutex> lock(pose_mutex_);
+        latest_pose_ = T;
+        has_pose_ = true;
+    }
+
+    // ── cloud + accumulation ────────────────────────
     void on_cloud(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
         PointCloudT::Ptr cloud(new PointCloudT);
         pcl::fromROSMsg(*msg, *cloud);
         if (cloud->empty()) return;
 
+        double now = this->now().seconds();
+
+        // push current frame into buffer
+        {
+            std::lock_guard<std::mutex> lock(pose_mutex_);
+            CloudFrame cf;
+            cf.cloud = cloud;
+            cf.pose  = latest_pose_;
+            cf.stamp = now;
+            buffer_.push_back(cf);
+        }
+
+        // evict old frames
+        while (!buffer_.empty() && (now - buffer_.front().stamp) > accumulate_window_)
+            buffer_.pop_front();
+
+        if (buffer_.empty()) return;
+
+        // transform & merge
+        PointCloudT::Ptr merged = merge_buffer();
+        if (merged->empty()) return;
+
+        // voxel downsample merged cloud
+        pcl::VoxelGrid<PointT> vg;
+        vg.setInputCloud(merged);
+        vg.setLeafSize(accumulate_voxel_, accumulate_voxel_, accumulate_voxel_);
+        PointCloudT::Ptr merged_ds(new PointCloudT);
+        vg.filter(*merged_ds);
+        if (merged_ds->empty()) return;
+
+        detect_and_publish(merged_ds, now);
+    }
+
+    PointCloudT::Ptr merge_buffer() {
+        const auto &latest = buffer_.back();
+        Eigen::Isometry3d T_w_b = latest.pose;  // world←base at latest frame
+        Eigen::Isometry3d T_b_w = T_w_b.inverse();
+
+        PointCloudT::Ptr merged(new PointCloudT);
+
+        for (auto &cf : buffer_) {
+            if (cf.cloud->empty()) continue;
+
+            if (has_pose_ && cf.cloud != latest.cloud) {
+                // transform cf.cloud (base_link@t_i) → base_link@t_latest
+                Eigen::Isometry3d T_delta = T_b_w * cf.pose;  // base←base_old
+                PointCloudT::Ptr aligned(new PointCloudT);
+                pcl::transformPointCloud(*cf.cloud, *aligned, T_delta.matrix());
+                *merged += *aligned;
+            } else {
+                *merged += *cf.cloud;
+            }
+        }
+
+        return merged;
+    }
+
+    void detect_and_publish(const PointCloudT::Ptr &cloud, double now) {
         // Euclidean clustering
         pcl::search::KdTree<PointT>::Ptr tree(new pcl::search::KdTree<PointT>);
         tree->setInputCloud(cloud);
@@ -91,14 +194,11 @@ private:
         std::vector<pcl::PointIndices> cluster_indices;
         pcl::EuclideanClusterExtraction<PointT> ec;
         ec.setClusterTolerance(cluster_tol_);
-        ec.setMinClusterSize(10);  // low floor for thin rings
+        ec.setMinClusterSize(10);
         ec.setMaxClusterSize(max_cluster_);
         ec.setSearchMethod(tree);
         ec.setInputCloud(cloud);
         ec.extract(cluster_indices);
-
-        RCLCPP_DEBUG(get_logger(), "cloud %ld pts -> %ld clusters",
-                    cloud->size(), cluster_indices.size());
 
         std::vector<Eigen::Vector3f> frame_ring_centers;
 
@@ -109,19 +209,10 @@ private:
 
             int n = static_cast<int>(cluster->size());
 
-            // centroid (for pillar)
             Eigen::Vector4f centroid;
             pcl::compute3DCentroid(*cluster, centroid);
 
-            // quick PCA for cluster-level debug
-            Eigen::Vector3f ev_clu = sorted_eigenvalues(cluster);
-            RCLCPP_DEBUG(get_logger(),
-                "cluster n=%d centroid=(%.2f,%.2f,%.2f) ev=(%.3f,%.3f,%.3f) l2/l1=%.3f l3/l1=%.3f",
-                n, centroid.x(), centroid.y(), centroid.z(),
-                ev_clu(0), ev_clu(1), ev_clu(2),
-                ev_clu(1)/ev_clu(0), ev_clu(2)/ev_clu(0));
-
-            // ── ring: RANSAC circle2D on 3 planes ──────
+            // ── ring: RANSAC circle2D ──────────────────
             Eigen::Vector3f ring_center;
             float ring_radius;
             if (is_ring(cluster, ring_center, ring_radius)) {
@@ -131,52 +222,40 @@ private:
                 frame_ring_centers.push_back(ring_center);
             }
 
-            // ── pillar: PCA (Z stretched) ─────────────
+            // ── pillar: PCA ────────────────────────────
             Eigen::Vector3f ev = sorted_eigenvalues(cluster);
             float l1 = ev(0), l2 = ev(1), l3 = ev(2);
             if (is_pillar(n, l1, l2, l3))
                 publish_pillar(centroid);
         }
 
-        // Temporal consistency filter
+        // Temporal consistency
         update_tracked_rings(frame_ring_centers);
         publish_confirmed_ring();
     }
 
-    // ── ring: PCA pre-filter + RANSAC circle2D on 3 planes ───
+    // ── ring detection ──────────────────────────────
     bool is_ring(const PointCloudT::Ptr &cluster,
                  Eigen::Vector3f &center, float &radius) {
         int n = static_cast<int>(cluster->size());
-        if (n < min_cluster_ring_) {
-            RCLCPP_DEBUG(get_logger(), "RING reject: n=%d < min=%d", n, min_cluster_ring_);
-            return false;
-        }
-        if (n > ring_max_pts_) {
-            RCLCPP_WARN(get_logger(), "RING reject: n=%d > max=%d", n, ring_max_pts_);
-            return false;
-        }
+        if (n < min_cluster_ring_) return false;
+        if (n > ring_max_pts_) return false;
 
-        // PCA pre-filter: must be thin (λ3 ≪ λ1), discard blobs/walls.
-        // Circularity check removed — RANSAC circle fit handles partial rings (1/3+ arc).
         Eigen::Vector3f ev = sorted_eigenvalues(cluster);
-        if (ev(2) / ev(0) > 0.20f) {
-            RCLCPP_WARN(get_logger(), "RING reject PCA thickness: n=%d ev=(%.4f,%.4f,%.4f) l3/l1=%.3f > 0.20",
-                        n, ev(0), ev(1), ev(2), ev(2)/ev(0));
-            return false;
-        }
+        if (ev(2) / ev(0) > 0.20f) return false;
 
         float best_ratio = 0;
         Eigen::Vector3f best_center(0, 0, 0);
         float best_r = 0;
 
-        // try all 3 projection planes
         try_plane(0, 1, 2, cluster, n, best_center, best_r, best_ratio);  // XY
         try_plane(0, 2, 1, cluster, n, best_center, best_r, best_ratio);  // XZ
         try_plane(1, 2, 0, cluster, n, best_center, best_r, best_ratio);  // YZ
 
         if (best_ratio < ring_inlier_min_) {
-            RCLCPP_WARN(get_logger(), "RING reject RANSAC ratio: n=%d best_r=%.3f best_ratio=%.3f < min=%.2f",
-                        n, best_r, best_ratio, ring_inlier_min_);
+            RCLCPP_DEBUG(get_logger(),
+                "RING reject RANSAC ratio: n=%d best_r=%.3f best_ratio=%.3f < min=%.2f",
+                n, best_r, best_ratio, ring_inlier_min_);
             return false;
         }
 
@@ -185,7 +264,6 @@ private:
         return true;
     }
 
-    // ax_a, ax_b = which axes form the circle plane; ax_z = orthogonal axis
     void try_plane(int ax_a, int ax_b, int ax_z,
                    const PointCloudT::Ptr &cluster, int n,
                    Eigen::Vector3f &best_center, float &best_r, float &best_ratio) {
@@ -243,7 +321,6 @@ private:
                 best_ca = ca;
                 best_cb = cb;
                 best_radius = r;
-                // avg Z from inliers
                 float z_sum = 0;
                 int z_cnt = 0;
                 for (int i = 0; i < n; i++) {
@@ -262,7 +339,6 @@ private:
         float ratio = static_cast<float>(best_inliers) / n;
         if (ratio > best_ratio) {
             best_ratio = ratio;
-            // map back to 3D
             float vals[3] = {0, 0, 0};
             vals[ax_a] = best_ca;
             vals[ax_b] = best_cb;
@@ -272,7 +348,7 @@ private:
         }
     }
 
-    // ── pillar: PCA ───────────────────────────────────────
+    // ── pillar: PCA ─────────────────────────────────
     bool is_pillar(int n, float l1, float l2, float l3) {
         if (n < min_cluster_pillar_) return false;
         if (!(l2 / l1 < pillar_l2l1_max_)) return false;
@@ -280,7 +356,7 @@ private:
         return true;
     }
 
-    // ── publish ───────────────────────────────────────────
+    // ── publish ─────────────────────────────────────
     void publish_ring(const Eigen::Vector3f &center) {
         geometry_msgs::msg::PoseStamped pose;
         pose.header.stamp = now();
@@ -301,11 +377,9 @@ private:
         pose.pose.position.z = centroid.z();
         pose.pose.orientation.w = 1.0;
         pillar_pub_->publish(pose);
-        RCLCPP_INFO(get_logger(), "Pillar: base_link %.2f %.2f %.2f",
-                    pose.pose.position.x, pose.pose.position.y, pose.pose.position.z);
     }
 
-    // ── temporal consistency ────────────────────────────
+    // ── temporal consistency ────────────────────────
     void update_tracked_rings(const std::vector<Eigen::Vector3f>& centers) {
         std::vector<bool> used(centers.size(), false);
 
@@ -352,8 +426,9 @@ private:
         }
     }
 
-    // ── members ───────────────────────────────────────────
+    // ── members ─────────────────────────────────────
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_sub_;
+    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr  ring_pub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr  pillar_pub_;
 
@@ -361,12 +436,19 @@ private:
     double cluster_tol_;
     int    min_cluster_ring_, min_cluster_pillar_, max_cluster_;
 
-    // ring: RANSAC circle2D
+    // ring
     double ring_fit_tol_, ring_inner_r_, ring_outer_r_, ring_inlier_min_;
     int ring_max_pts_;
 
-    // pillar: PCA
+    // pillar
     double pillar_l2l1_max_, pillar_l1l3_min_;
+
+    // multi-frame accumulation
+    double accumulate_window_, accumulate_voxel_;
+    std::deque<CloudFrame> buffer_;
+    Eigen::Isometry3d latest_pose_ = Eigen::Isometry3d::Identity();
+    bool has_pose_ = false;
+    std::mutex pose_mutex_;
 
     // temporal consistency
     std::vector<TrackedRing> tracked_;
