@@ -3,10 +3,12 @@
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+#include <std_srvs/srv/trigger.hpp>
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/filters/voxel_grid.h>
+#include <pcl/io/pcd_io.h>
 #include <pcl/registration/icp.h>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
@@ -38,6 +40,7 @@ public:
         this->declare_parameter("loop_min_index_diff", 30);  // 新增：回环最小索引差
         this->declare_parameter("icp_max_translation", 0.1); // 新增：ICP最大有效平移(m)
         this->declare_parameter("icp_max_rotation", 0.1);    // 新增：ICP最大有效旋转(rad)
+        this->declare_parameter("map_export_path", "./optimized_map.pcd");
 
         // 获取参数
         keyframe_distance_ = this->get_parameter("keyframe_distance").as_double();
@@ -68,6 +71,11 @@ public:
         // 发布器
         optimized_path_pub_ = this->create_publisher<nav_msgs::msg::Path>("/optimized_path", 10);
         optimized_odom_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("/Odometry_scpgo", 10);
+
+        // 地图导出服务
+        map_export_srv_ = this->create_service<std_srvs::srv::Trigger>(
+            "/map_export", std::bind(&SCPGONode::mapExportCallback, this,
+            std::placeholders::_1, std::placeholders::_2));
 
         // 启动回环检测线程
         loop_thread_ = std::thread(&SCPGONode::loopClosureThread, this);
@@ -392,12 +400,52 @@ private:
         optimized_odom_pub_->publish(odom_msg);
     }
 
+    void mapExportCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*req*/,
+                           std::shared_ptr<std_srvs::srv::Trigger::Response> res) {
+        std::lock_guard<std::mutex> kf_lock(kf_mutex_);
+        std::lock_guard<std::mutex> g_lock(graph_mutex_);
+
+        if (keyframes_.empty()) {
+            res->success = false;
+            res->message = "No keyframes to export";
+            return;
+        }
+
+        std::string path = this->get_parameter("map_export_path").as_string();
+        pcl::PointCloud<PointType> merged;
+
+        for (auto& kf : keyframes_) {
+            pcl::PointCloud<PointType> transformed;
+            Eigen::Affine3f T = kf.pose.cast<float>();
+            pcl::transformPointCloud(*kf.cloud, transformed, T);
+            merged += transformed;
+        }
+
+        pcl::VoxelGrid<PointType> voxel;
+        voxel.setInputCloud(merged.makeShared());
+        voxel.setLeafSize(0.3f, 0.3f, 0.3f);
+        pcl::PointCloud<PointType> filtered;
+        voxel.filter(filtered);
+
+        if (pcl::io::savePCDFileBinary(path, filtered) == -1) {
+            res->success = false;
+            res->message = "Failed to write PCD: " + path;
+        } else {
+            res->success = true;
+            res->message = "Saved " + std::to_string(filtered.size()) +
+                           " points from " + std::to_string(keyframes_.size()) +
+                           " keyframes → " + path;
+            RCLCPP_INFO(this->get_logger(), "%s", res->message.c_str());
+        }
+    }
+
     // 成员变量
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr pose_sub_;
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_sub_;
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr optimized_path_pub_;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr optimized_odom_pub_;
     rclcpp::TimerBase::SharedPtr pub_timer_;
+    rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr map_export_srv_;
 
     nav_msgs::msg::Odometry::SharedPtr current_odom_;
     std::mutex odom_mutex_;

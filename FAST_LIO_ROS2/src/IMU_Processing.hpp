@@ -23,7 +23,7 @@
 
 /// *************Preconfiguration
 
-#define MAX_INI_COUNT (10)
+#define MAX_INI_COUNT (200)  // ~1s of IMU data @200Hz (was 10 = 0.05s, too short for MEMS)
 
 const bool time_list(PointType &x, PointType &y) {return (x.curvature < y.curvature);};
 
@@ -79,6 +79,7 @@ class ImuProcess
   int    init_iter_num = 1;
   bool   b_first_frame_ = true;
   bool   imu_need_init_ = true;
+  double imu_init_start_wall_ = 0;  // wall-clock timestamp when IMU init began
 };
 
 ImuProcess::ImuProcess()
@@ -172,6 +173,26 @@ void ImuProcess::IMU_init(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 
     first_lidar_time = meas.lidar_beg_time;
   }
 
+  // ---- stationary check: reject entire frame if drone is moving ----
+  {
+    V3D acc_ref(meas.imu.front()->linear_acceleration.x,
+                meas.imu.front()->linear_acceleration.y,
+                meas.imu.front()->linear_acceleration.z);
+    for (const auto &imu : meas.imu) {
+      V3D a(imu->linear_acceleration.x, imu->linear_acceleration.y, imu->linear_acceleration.z);
+      V3D w(imu->angular_velocity.x, imu->angular_velocity.y, imu->angular_velocity.z);
+      if ((a - acc_ref).norm() > 1.0 || w.norm() > 0.3) {
+        static int skip_cnt = 0;
+        if (++skip_cnt % 5 == 1) {
+          printf("[imu_init] frame skipped — drone moving (acc_delta=%.2f gyr=%.2f) — keep STILL!\n",
+                 (a - acc_ref).norm(), w.norm());
+          fflush(stdout);
+        }
+        return;  // Don't accumulate this frame's data
+      }
+    }
+  }
+
   for (const auto &imu : meas.imu)
   {
     const auto &imu_acc = imu->linear_acceleration;
@@ -189,6 +210,11 @@ void ImuProcess::IMU_init(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 
 
     N ++;
   }
+
+  printf("[imu_init] gravity=%.4f m/s² bg=[%.4f %.4f %.4f] acc_var=%.6f samples=%d\n",
+         mean_acc.norm(), mean_gyr(0), mean_gyr(1), mean_gyr(2), cov_acc.norm(), N);
+  fflush(stdout);
+
   state_ikfom init_state = kf_state.get_x();
   init_state.grav = S2(- mean_acc / mean_acc.norm() * G_m_s2);
   
@@ -346,16 +372,26 @@ void ImuProcess::Process(const MeasureGroup &meas,  esekfom::esekf<state_ikfom, 
 
   if (imu_need_init_)
   {
+    if (imu_init_start_wall_ == 0) imu_init_start_wall_ = omp_get_wtime();
+
     /// The very first lidar frame
     IMU_init(meas, kf_state, init_iter_num);
 
     imu_need_init_ = true;
-    
+
     last_imu_   = meas.imu.back();
 
     state_ikfom imu_state = kf_state.get_x();
-    if (init_iter_num > MAX_INI_COUNT)
+    bool enough_samples = init_iter_num > MAX_INI_COUNT;
+    bool timed_out = (omp_get_wtime() - imu_init_start_wall_) > 30.0;
+
+    if (enough_samples || timed_out)
     {
+      if (timed_out && !enough_samples) {
+        printf("[imu_init] TIMEOUT after %.0fs — forcing init with %d samples (quality may be degraded)\n",
+               omp_get_wtime() - imu_init_start_wall_, init_iter_num);
+        fflush(stdout);
+      }
       cov_acc *= pow(G_m_s2 / mean_acc.norm(), 2);
       imu_need_init_ = false;
 

@@ -20,6 +20,8 @@
   <!-- 仅仅声明对 livox_ros_driver2 和 fast_lio 的依赖，方便编译时找到头文件 -->
   <depend>livox_ros_driver2</depend>
   <depend>fast_lio</depend>
+  <depend>libpcl-all-dev</depend>
+  <depend>pcl_conversions</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

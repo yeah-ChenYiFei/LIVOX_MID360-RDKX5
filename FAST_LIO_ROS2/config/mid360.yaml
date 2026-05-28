@@ -1,10 +1,10 @@
 /**:
     ros__parameters:
         feature_extract_enable: false
-        point_filter_num: 3
+        point_filter_num: 4     # was 3 — downsample input to reduce IKDTree search load
         max_iteration: 3
         filter_size_surf: 0.5
-        filter_size_map: 0.5
+        filter_size_map: 0.8   # was 0.5 — larger voxel reduces map point density
         cube_side_length: 1000.0
         runtime_pos_log_enable: false
         map_file_path: "./test.pcd"
@@ -24,10 +24,10 @@
             scan_rate: 10
 
         mapping:
-            acc_cov: 0.5
-            gyr_cov: 0.1
-            b_acc_cov: 0.001
-            b_gyr_cov: 0.001
+            acc_cov: 2.0              # MID360 built-in MEMS: higher noise than standalone IMU
+            gyr_cov: 0.5              # was 0.1 — trust LiDAR more than gyro integration
+            b_acc_cov: 0.005          # was 0.001 — MEMS bias random walk is worse
+            b_gyr_cov: 0.005          # was 0.001
             fov_degree:    360.0
             det_range:     15.0
             extrinsic_est_en:  false     # disable when stationary — unobservable, causes drift

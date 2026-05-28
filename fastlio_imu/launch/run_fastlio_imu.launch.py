@@ -3,6 +3,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 def generate_launch_description():
@@ -11,6 +12,12 @@ def generate_launch_description():
     # livox_driver_pkg = get_package_share_directory('livox_ros_driver2')
     fast_lio_pkg = get_package_share_directory('fast_lio')
     fastlio_pgo_pkg = get_package_share_directory('fastlio_pgo')
+
+    # Optional pre-built map for ICP localization
+    map_file_arg = DeclareLaunchArgument(
+        'map_file', default_value='',
+        description='Path to pre-built PCD map for ICP localization (empty = skip localizer)'
+    )
 
     # 1. 启动 Livox 驱动 (msg_MID360_launch.py)
     # livox_launch = IncludeLaunchDescription(
@@ -102,12 +109,24 @@ def generate_launch_description():
         }]
     )
 
+    map_localizer_node = Node(
+        package='fastlio_imu',
+        executable='map_localizer',
+        name='map_localizer',
+        output='screen',
+        parameters=[{
+            'map_file': LaunchConfiguration('map_file'),
+        }]
+    )
+
     return LaunchDescription([
+        map_file_arg,
         # livox_launch,
         fastlio_launch,
         forward_node,
         ros_to_serial_node,
         sc_pgo_launch,
         cloud_filter_node,
-        shape_detect_node
+        shape_detect_node,
+        map_localizer_node,
     ])

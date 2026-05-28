@@ -11,7 +11,12 @@
 class OdomToFCU : public rclcpp::Node {
 public:
     OdomToFCU() : Node("odom_to_fcu") {
-        // High-frequency raw odometry from FAST-LIO
+        // Primary: ICP-localized odometry (drift-free, from map_localizer)
+        localized_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
+            "/localized_odometry", 10,
+            std::bind(&OdomToFCU::localized_callback, this, std::placeholders::_1));
+
+        // Fallback: high-frequency raw odometry from FAST-LIO
         odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
             "/Odometry", 10,
             std::bind(&OdomToFCU::odom_callback, this, std::placeholders::_1));
@@ -78,13 +83,24 @@ private:
             corr.translation().x(), corr.translation().y(), corr.translation().z());
     }
 
-    // Raw odometry callback: publish at full rate with drift correction applied
+    // Localized odometry callback (ICP-corrected, primary source)
+    void localized_callback(const nav_msgs::msg::Odometry::SharedPtr msg) {
+        last_localized_time_ = this->now().seconds();
+        processAndPublish(msg, false);  // no PGO correction needed
+    }
+
+    // Raw odometry callback: fallback when localized is stale, with PGO correction
     void odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg) {
+        // Always store raw for PGO correction computation
         {
             std::lock_guard<std::mutex> lock(raw_mutex_);
             raw_odom_ = *msg;
             has_raw_odom_ = true;
         }
+
+        // If localized odometry is fresh, skip raw processing
+        double now = this->now().seconds();
+        if (now - last_localized_time_ < 1.0) return;
 
         // Apply PGO correction if available
         nav_msgs::msg::Odometry corrected;
@@ -92,6 +108,13 @@ private:
             std::lock_guard<std::mutex> lock(corr_mutex_);
             corrected = has_correction_ ? applyCorrection(*msg, T_correction_) : *msg;
         }
+        processAndPublish(std::make_shared<nav_msgs::msg::Odometry>(corrected), true);
+    }
+
+    void processAndPublish(const nav_msgs::msg::Odometry::SharedPtr msg, bool /*from_raw*/) {
+        // msg is already corrected by caller (localized_callback passes ICP-corrected;
+        // odom_callback passes PGO-corrected). No further correction applied here.
+        const nav_msgs::msg::Odometry& corrected = *msg;
 
         // --- compute speed (used by both watchdogs) ---
         double lvx = corrected.twist.twist.linear.x;
@@ -293,6 +316,7 @@ private:
     }
 
     // Subscriptions
+    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr localized_sub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr pgo_sub_;
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
@@ -319,6 +343,9 @@ private:
     Eigen::Isometry3d T_correction_ = Eigen::Isometry3d::Identity();
     bool has_correction_ = false;
     std::mutex corr_mutex_;
+
+    // Localized odometry timeout
+    double last_localized_time_ = 0.0;
 
     // Position jump watchdog
     bool has_valid_pose_ = false;

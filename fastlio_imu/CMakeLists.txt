@@ -16,6 +16,8 @@ find_package(rosidl_default_generators REQUIRED)
 # 只保留rclpy（运行时依赖），删除ament_cmake_python
 find_package(rclpy REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(PCL REQUIRED)
+find_package(pcl_conversions REQUIRED)
 
 # 2. 先定义消息生成 (原有逻辑不变)
 rosidl_generate_interfaces(${PROJECT_NAME}
@@ -41,6 +43,18 @@ rosidl_target_interfaces(fastlio_to_fcu
   ${PROJECT_NAME} "rosidl_typesupport_cpp"
 )
 
+# 5. map_localizer: ICP scan-to-map localization node
+add_executable(map_localizer src/map_localizer.cpp)
+ament_target_dependencies(map_localizer
+  rclcpp
+  nav_msgs
+  sensor_msgs
+  std_msgs
+  pcl_conversions
+)
+target_include_directories(map_localizer PRIVATE ${EIGEN3_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
+target_link_libraries(map_localizer ${PCL_LIBRARIES})
+
 # ============ 仅保留Python可执行脚本安装（彻底删除ament_python_install_package） ============
 install(PROGRAMS
   src/ros_to_serial.py
@@ -50,7 +64,7 @@ install(PROGRAMS
 # ================================================================
 
 # 6. 原有安装逻辑 (保留)
-install(TARGETS fastlio_to_fcu DESTINATION lib/${PROJECT_NAME})
+install(TARGETS fastlio_to_fcu map_localizer DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch/ DESTINATION share/${PROJECT_NAME})
 
 ament_package()
