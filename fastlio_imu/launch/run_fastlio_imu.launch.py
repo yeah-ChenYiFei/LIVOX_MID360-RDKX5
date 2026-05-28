@@ -70,11 +70,6 @@ def generate_launch_description():
             'sor_enabled': True,
             'sor_mean_k': 20,
             'sor_stddev': 1.0,
-            # RANSAC
-            'ransac_dist_thresh': 0.03,
-            'ransac_ground_nz_min': 0.7,
-            'ransac_wall_min_ratio': 0.30,
-            'wall_removal_enabled': True,
         }]
     )
 
@@ -95,6 +90,15 @@ def generate_launch_description():
             'ring_max_points': 800,
             'pillar_l2_l1_max': 0.35,
             'pillar_l1_l3_min': 8.0,
+            # multi-frame accumulation
+            'accumulate_window': 1.5,
+            'accumulate_voxel': 0.02,
+            # RANSAC (after fusion — ring is dense enough to survive)
+            'ground_removal_enabled': True,
+            'wall_removal_enabled': True,
+            'ransac_dist_thresh': 0.03,
+            'ransac_ground_nz_min': 0.7,
+            'ransac_wall_min_ratio': 0.30,
         }]
     )
 

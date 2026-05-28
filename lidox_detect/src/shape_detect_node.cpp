@@ -18,6 +18,8 @@
 #include <pcl_conversions/pcl_conversions.h>
 
 #include <pcl/segmentation/extract_clusters.h>
+#include <pcl/segmentation/sac_segmentation.h>
+#include <pcl/filters/extract_indices.h>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/common/pca.h>
 #include <pcl/common/centroid.h>
@@ -79,6 +81,13 @@ public:
         // ── multi-frame accumulation ────────────────────
         accumulate_window_ = declare("accumulate_window",   1.5);
         accumulate_voxel_  = declare("accumulate_voxel",    0.02);
+
+        // ── RANSAC (after fusion, before clustering) ────
+        ground_removal_en_ = declare("ground_removal_enabled",  true);
+        wall_removal_en_   = declare("wall_removal_enabled",    true);
+        ransac_dist_       = declare("ransac_dist_thresh",      0.03);
+        ransac_ground_nz_  = declare("ransac_ground_nz_min",   0.7);
+        ransac_wall_ratio_ = declare("ransac_wall_min_ratio",  0.30);
 
         // ── pub / sub ────────────────────────────────────
         cloud_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
@@ -195,7 +204,59 @@ private:
         return merged;
     }
 
-    void detect_and_publish(const PointCloudT::Ptr &cloud, double now) {
+    void detect_and_publish(PointCloudT::Ptr &cloud, double now) {
+        // ── RANSAC ground removal (after fusion — ring is dense enough to survive) ──
+        if (ground_removal_en_ && cloud->size() > 50) {
+            pcl::ModelCoefficients::Ptr coeff(new pcl::ModelCoefficients);
+            pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
+            pcl::SACSegmentation<PointT> seg;
+            seg.setOptimizeCoefficients(true);
+            seg.setModelType(pcl::SACMODEL_PLANE);
+            seg.setMethodType(pcl::SAC_RANSAC);
+            seg.setDistanceThreshold(ransac_dist_);
+            seg.setInputCloud(cloud);
+            seg.segment(*inliers, *coeff);
+
+            if (!inliers->indices.empty() && coeff->values.size() >= 4) {
+                float nz = std::fabs(coeff->values[2]);
+                if (nz > ransac_ground_nz_) {
+                    pcl::ExtractIndices<PointT> extract;
+                    extract.setInputCloud(cloud);
+                    extract.setIndices(inliers);
+                    extract.setNegative(true);
+                    extract.filter(*cloud);
+                }
+            }
+        }
+
+        if (cloud->empty()) return;
+
+        // ── RANSAC wall removal (large planar surfaces) ──
+        if (wall_removal_en_ && cloud->size() > 50) {
+            pcl::ModelCoefficients::Ptr coeff(new pcl::ModelCoefficients);
+            pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
+            pcl::SACSegmentation<PointT> seg;
+            seg.setOptimizeCoefficients(true);
+            seg.setModelType(pcl::SACMODEL_PLANE);
+            seg.setMethodType(pcl::SAC_RANSAC);
+            seg.setDistanceThreshold(ransac_dist_);
+            seg.setInputCloud(cloud);
+            seg.segment(*inliers, *coeff);
+
+            if (!inliers->indices.empty()) {
+                double ratio = static_cast<double>(inliers->indices.size()) / cloud->size();
+                if (ratio > ransac_wall_ratio_) {
+                    pcl::ExtractIndices<PointT> extract;
+                    extract.setInputCloud(cloud);
+                    extract.setIndices(inliers);
+                    extract.setNegative(true);
+                    extract.filter(*cloud);
+                }
+            }
+        }
+
+        if (cloud->empty()) return;
+
         // Euclidean clustering
         pcl::search::KdTree<PointT>::Ptr tree(new pcl::search::KdTree<PointT>);
         tree->setInputCloud(cloud);
@@ -459,6 +520,10 @@ private:
     Eigen::Isometry3d latest_pose_ = Eigen::Isometry3d::Identity();
     bool has_pose_ = false;
     std::mutex pose_mutex_;
+
+    // RANSAC (after fusion)
+    bool ground_removal_en_, wall_removal_en_;
+    double ransac_dist_, ransac_ground_nz_, ransac_wall_ratio_;
 
     // temporal consistency
     std::vector<TrackedRing> tracked_;
