@@ -93,6 +93,8 @@ public:
             "/lidox/ring_center", 10);
         pillar_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>(
             "/lidox/pillar_center", 10);
+        merged_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+            "/lidox/merged_cloud", 10);
 
         RCLCPP_INFO(get_logger(),
             "ShapeDetectNode: multi-frame acc window=%.1fs voxel=%.2f",
@@ -158,6 +160,13 @@ private:
         PointCloudT::Ptr merged_ds(new PointCloudT);
         vg.filter(*merged_ds);
         if (merged_ds->empty()) return;
+
+        // publish merged cloud for RViz2 debugging
+        sensor_msgs::msg::PointCloud2 merged_msg;
+        pcl::toROSMsg(*merged_ds, merged_msg);
+        merged_msg.header.stamp = this->now();
+        merged_msg.header.frame_id = "base_link";
+        merged_pub_->publish(merged_msg);
 
         detect_and_publish(merged_ds, now);
     }
@@ -431,6 +440,7 @@ private:
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr  ring_pub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr  pillar_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr    merged_pub_;
 
     // cluster
     double cluster_tol_;
