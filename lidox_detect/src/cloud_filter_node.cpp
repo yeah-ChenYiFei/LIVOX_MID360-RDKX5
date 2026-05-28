@@ -1,6 +1,6 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
-#include <livox_ros_driver2/msg/custom_msg.hpp>
+
 
 #include <pcl/point_types.h>
 #include <pcl/point_cloud.h>
@@ -43,7 +43,7 @@ public:
         ransac_wall_ratio_ = declare_parameter("ransac_wall_min_ratio", 0.30);
         wall_removal_en_   = declare_parameter("wall_removal_enabled", true);
 
-        cloud_sub_ = this->create_subscription<livox_ros_driver2::msg::CustomMsg>(
+        cloud_sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
             "/livox/lidar",
             rclcpp::SensorDataQoS(),
             std::bind(&CloudFilterNode::cloud_callback, this, std::placeholders::_1)
@@ -60,7 +60,7 @@ public:
     }
 
 private:
-    rclcpp::Subscription<livox_ros_driver2::msg::CustomMsg>::SharedPtr cloud_sub_;
+    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_sub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_pub_;
 
     double x_min_, x_max_, y_min_, y_max_, z_min_, z_max_;
@@ -71,13 +71,10 @@ private:
     double ransac_dist_, ransac_ground_nz_, ransac_wall_ratio_;
     bool wall_removal_en_;
 
-    void cloud_callback(const livox_ros_driver2::msg::CustomMsg::SharedPtr msg)
+    void cloud_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     {
         PointCloudT::Ptr cloud_raw(new PointCloudT);
-        cloud_raw->reserve(msg->points.size());
-        for (auto &pt : msg->points) {
-            cloud_raw->push_back(PointT(pt.x, pt.y, pt.z));
-        }
+        pcl::fromROSMsg(*msg, *cloud_raw);
 
         if (cloud_raw->empty()) return;
 
