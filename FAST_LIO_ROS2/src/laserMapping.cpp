@@ -1164,6 +1164,21 @@ private:
             double solve_H_time = 0;
             kf.update_iterated_dyn_share_modified(LASER_POINT_COV, solve_H_time);
             state_point = kf.get_x();
+
+            // ── ZUPT: zero-velocity update when stationary ──
+            {
+                static int zupt_cnt = 0;
+                if (state_point.vel.norm() < 0.05) {
+                    zupt_cnt++;
+                    if (zupt_cnt > 10) {
+                        state_point.vel.setZero();
+                        kf.change_x(state_point);
+                    }
+                } else {
+                    zupt_cnt = 0;
+                }
+            }
+
             euler_cur = SO3ToEuler(state_point.rot);
             pos_lid = state_point.pos + state_point.rot * state_point.offset_T_L_I;
             geoQuat.x = state_point.rot.coeffs()[0];
