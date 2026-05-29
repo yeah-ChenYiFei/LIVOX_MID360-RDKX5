@@ -63,7 +63,7 @@
 #include "preprocess.h"
 #include <ikd-Tree/ikd_Tree.h>
 
-#define INIT_TIME           (2.0)  // 2s for MID360 non-repetitive scan to cover full FOV
+#define INIT_TIME           (0.1)
 #define LASER_POINT_COV     (0.001)
 #define MAXN                (720000)
 #define PUBFRAME_PERIOD     (20)
@@ -96,7 +96,6 @@ int    effct_feat_num = 0, time_log_counter = 0, scan_count = 0, publish_count =
 int    iterCount = 0, feats_down_size = 0, NUM_MAX_ITERATIONS = 0, laserCloudValidNum = 0, pcd_save_interval = -1, pcd_index = 0;
 bool   point_selected_surf[100000] = {0};
 bool   lidar_pushed, flg_first_scan = true, flg_exit = false, flg_EKF_inited;
-int    consecutive_icp_failures = 0;
 bool   scan_pub_en = false, dense_pub_en = false, scan_body_pub_en = false;
 bool    is_first_lidar = true;
 
@@ -387,19 +386,6 @@ bool sync_packages(MeasureGroup &meas)
         return false;
     }
 
-    // Drop oldest scans when queue is backing up (processing slower than 10Hz)
-    // Keeps latency bounded to ~500ms on RDK X5 ARM
-    while (lidar_buffer.size() > 5) {
-        lidar_buffer.pop_front();
-        time_buffer.pop_front();
-        static int drop_cnt = 0;
-        if (++drop_cnt % 50 == 1) {
-            printf("[sync] dropping stale scan (buffer depth %zu, dropped %d total)\n",
-                   lidar_buffer.size(), drop_cnt);
-            fflush(stdout);
-        }
-    }
-
     /*** push a lidar scan ***/
     if(!lidar_pushed)
     {
@@ -423,34 +409,11 @@ bool sync_packages(MeasureGroup &meas)
 
         meas.lidar_end_time = lidar_end_time;
 
-        // ── diagnostic: LiDAR→IMU clock offset ──
-        static int diag_count = 0;
-        if (++diag_count % 50 == 0) {
-            double now = omp_get_wtime();
-            double imu_head = imu_buffer.empty() ? -1.0 : get_time_sec(imu_buffer.front()->header.stamp);
-            double imu_tail = imu_buffer.empty() ? -1.0 : get_time_sec(imu_buffer.back()->header.stamp);
-            printf("[sync_diag] frame #%d: lidar_beg=%.3f lidar_end=%.3f imu_head=%.3f imu_tail=%.3f "
-                   "lidar_buf=%zu imu_buf=%zu imu_lag=%.3fs wall_clock=%.3f\n",
-                   scan_num, meas.lidar_beg_time, lidar_end_time, imu_head, imu_tail,
-                   lidar_buffer.size(), imu_buffer.size(),
-                   lidar_end_time - imu_tail, now);
-            fflush(stdout);
-        }
-
         lidar_pushed = true;
     }
 
-    // Only stall when no IMU data at all — otherwise proceed with available data.
-    // MID360 built-in IMU can have sub-ms clock drift vs LiDAR timestamp,
-    // and waiting for "future" IMU data causes multi-second pipeline gaps.
-    if (imu_buffer.empty())
+    if (last_timestamp_imu < lidar_end_time)
     {
-        static int stall_count = 0;
-        if (++stall_count % 100 == 0) {
-            printf("[sync_diag] STALL x%d: imu_buffer empty, lidar_end=%.3f\n",
-                   stall_count, lidar_end_time);
-            fflush(stdout);
-        }
         return false;
     }
 
@@ -474,11 +437,6 @@ bool sync_packages(MeasureGroup &meas)
 int process_increments = 0;
 void map_incremental()
 {
-    // Skip map insertion when stationary, but only after map is mature (500+ points).
-    // This allows initial map to build from stationary scans on the ground,
-    // then prevents duplicate stacking once the map is dense enough for reliable ICP.
-    if (state_point.vel.norm() < 0.05 && ikdtree.validnum() > 500) return;
-
     PointVector PointToAdd;
     PointVector PointNoNeedDownsample;
     PointToAdd.reserve(feats_down_size);
@@ -685,23 +643,14 @@ void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPt
     Eigen::Matrix3d R_world_to_body = state_est.rot.inverse().toRotationMatrix();
     Eigen::Vector3d vel_body = R_world_to_body * vel_world;
 
-    // Guard: when ICP fails repeatedly, EKF velocity diverges from
-    // IMU-only integration.  No real drone exceeds 5 m/s indoors.
-    static constexpr double MAX_REALISTIC_SPEED = 5.0;
-    if (vel_body.norm() > MAX_REALISTIC_SPEED) {
-        vel_body.setZero();
-        static int warn_cnt = 0;
-        if (++warn_cnt % 10 == 1) {
-            std::cerr << "[odom] velocity diverged, zeroing (warn #" << warn_cnt << ")" << std::endl;
-        }
-    }
-
     odomAftMapped.twist.twist.linear.x = vel_body(0);
     odomAftMapped.twist.twist.linear.y = vel_body(1);
     odomAftMapped.twist.twist.linear.z = vel_body(2);
 
     // 3. 设置角速度
-    // PX4 relies on its own IMU for angular velocity; set to 0 here.
+    // 由于在这个函数里不方便直接拿到最新的原始 IMU 数据并减去零偏，
+    // 且 PX4 飞控主要依赖线速度进行位置控制，角速度可以暂设为 0。
+    // PX4 会利用自身的 IMU 数据补充角速度信息。
     odomAftMapped.twist.twist.angular.x = 0;
     odomAftMapped.twist.twist.angular.y = 0;
     odomAftMapped.twist.twist.angular.z = 0;
@@ -822,11 +771,10 @@ void h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_
     if (effct_feat_num < 1)
     {
         ekfom_data.valid = false;
-        consecutive_icp_failures++;
-        std::cerr << "No Effective Points! (fail #" << consecutive_icp_failures << ")" << std::endl;
+        std::cerr << "No Effective Points!" << std::endl;
+        // ROS_WARN("No Effective Points! \n");
         return;
     }
-    consecutive_icp_failures = 0;
 
     res_mean_last = total_residual / effct_feat_num;
     match_time  += omp_get_wtime() - match_start;
@@ -853,9 +801,7 @@ void h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_
         /*** calculate the Measuremnt Jacobian matrix H ***/
         V3D C(s.rot.conjugate() *norm_vec);
         V3D A(point_crossmat * C);
-        // Only estimate extrinsic when drone is moving (>0.2 m/s).
-        // Stationary estimation causes covariance divergence (extrinsic unobservable).
-        if (extrinsic_est_en && s.vel.norm() > 0.2)
+        if (extrinsic_est_en)
         {
             V3D B(point_be_crossmat * s.offset_R_L_I.conjugate() * C); //s.rot.conjugate()*norm_vec);
             ekfom_data.h_x.block<1, 12>(i,0) << norm_p.x, norm_p.y, norm_p.z, VEC_FROM_ARRAY(A), VEC_FROM_ARRAY(B), VEC_FROM_ARRAY(C);
@@ -1066,29 +1012,6 @@ private:
 
             flg_EKF_inited = (Measures.lidar_beg_time - first_lidar_time) < INIT_TIME ? \
                             false : true;
-
-            // --- sanity check: skip frame if any point has extreme coords (prevents VoxelGrid overflow) ---
-            bool bad_scan = false;
-            for (size_t i = 0; i < feats_undistort->size(); i++) {
-                const auto &p = feats_undistort->points[i];
-                if (fabs(p.x) > 1e4f || fabs(p.y) > 1e4f || fabs(p.z) > 1e4f) {
-                    bad_scan = true;
-                    break;
-                }
-            }
-            if (bad_scan) {
-                std::cerr << "[skip] extreme point coords in scan, skipping frame to avoid VoxelGrid overflow" << std::endl;
-                consecutive_icp_failures++;
-                return;
-            }
-
-            // --- warn on persistent ICP failures ---
-            static constexpr int MAX_CONSEC_FAILURES = 50;
-            if (consecutive_icp_failures == MAX_CONSEC_FAILURES) {
-                std::cerr << "[warn] " << MAX_CONSEC_FAILURES
-                          << " consecutive ICP failures, pos=" << state_point.pos.norm() << "m" << std::endl;
-            }
-
             /*** Segment the map in lidar FOV ***/
             lasermap_fov_segment();
 
@@ -1132,20 +1055,6 @@ private:
             fout_pre<<setw(20)<<Measures.lidar_beg_time - first_lidar_time<<" "<<euler_cur.transpose()<<" "<< state_point.pos.transpose()<<" "<<ext_euler.transpose() << " "<<state_point.offset_T_L_I.transpose()<< " " << state_point.vel.transpose() \
             <<" "<<state_point.bg.transpose()<<" "<<state_point.ba.transpose()<<" "<<state_point.grav<< endl;
 
-            // ── extrinsic calibration monitor ──
-            static int ext_ok_cnt = 0, ext_skip_cnt = 0;
-            if (extrinsic_est_en) {
-                bool moving = state_point.vel.norm() > 0.2;
-                if (moving) ext_ok_cnt++; else ext_skip_cnt++;
-                if ((ext_ok_cnt + ext_skip_cnt) % 100 == 0) {
-                    printf("[ext_calib] T=[%.4f %.4f %.4f] R_euler=[%.2f %.2f %.2f]° vel=%.2f m/s active=%d/%d\n",
-                           state_point.offset_T_L_I(0), state_point.offset_T_L_I(1), state_point.offset_T_L_I(2),
-                           ext_euler(0)*57.3, ext_euler(1)*57.3, ext_euler(2)*57.3,
-                           state_point.vel.norm(), ext_ok_cnt, ext_skip_cnt);
-                    fflush(stdout);
-                }
-            }
-
             if(0) // If you need to see map point, change to "if(1)"
             {
                 PointVector ().swap(ikdtree.PCL_Storage);
@@ -1166,21 +1075,6 @@ private:
             double solve_H_time = 0;
             kf.update_iterated_dyn_share_modified(LASER_POINT_COV, solve_H_time);
             state_point = kf.get_x();
-
-            // ── ZUPT: zero-velocity update when stationary ──
-            {
-                static int zupt_cnt = 0;
-                if (state_point.vel.norm() < 0.05) {
-                    zupt_cnt++;
-                    if (zupt_cnt > 10) {
-                        state_point.vel.setZero();
-                        kf.change_x(state_point);
-                    }
-                } else {
-                    zupt_cnt = 0;
-                }
-            }
-
             euler_cur = SO3ToEuler(state_point.rot);
             pos_lid = state_point.pos + state_point.rot * state_point.offset_T_L_I;
             geoQuat.x = state_point.rot.coeffs()[0];
@@ -1192,17 +1086,6 @@ private:
 
             /******* Publish odometry *******/
             publish_odometry(pubOdomAftMapped_, tf_broadcaster_);
-
-            // ── diagnostic: end-to-end latency ──
-            static int lat_count = 0;
-            if (++lat_count % 20 == 0) {
-                static double first_lidar = 0, first_wall = 0;
-                if (first_lidar == 0) { first_lidar = Measures.lidar_end_time; first_wall = omp_get_wtime(); }
-                double lat = (omp_get_wtime() - first_wall) - (Measures.lidar_end_time - first_lidar);
-                printf("[latency] frame #%d: E2E=%.3fs proc=%.3fs\n",
-                       scan_num, lat, omp_get_wtime() - t0);
-                fflush(stdout);
-            }
 
             /*** add the feature points to map kdtree ***/
             t3 = omp_get_wtime();

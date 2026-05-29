@@ -3,12 +3,10 @@
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <nav_msgs/msg/odometry.hpp>
-#include <std_srvs/srv/trigger.hpp>
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/filters/voxel_grid.h>
-#include <pcl/io/pcd_io.h>
 #include <pcl/registration/icp.h>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
@@ -40,7 +38,6 @@ public:
         this->declare_parameter("loop_min_index_diff", 30);  // 新增：回环最小索引差
         this->declare_parameter("icp_max_translation", 0.1); // 新增：ICP最大有效平移(m)
         this->declare_parameter("icp_max_rotation", 0.1);    // 新增：ICP最大有效旋转(rad)
-        this->declare_parameter("map_export_path", "./optimized_map.pcd");
 
         // 获取参数
         keyframe_distance_ = this->get_parameter("keyframe_distance").as_double();
@@ -71,11 +68,6 @@ public:
         // 发布器
         optimized_path_pub_ = this->create_publisher<nav_msgs::msg::Path>("/optimized_path", 10);
         optimized_odom_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("/Odometry_scpgo", 10);
-
-        // 地图导出服务
-        map_export_srv_ = this->create_service<std_srvs::srv::Trigger>(
-            "/map_export", std::bind(&SCPGONode::mapExportCallback, this,
-            std::placeholders::_1, std::placeholders::_2));
 
         // 启动回环检测线程
         loop_thread_ = std::thread(&SCPGONode::loopClosureThread, this);
@@ -135,31 +127,32 @@ private:
             kf.gtsam_pose = gtsam::Pose3(gtsam::Rot3(kf.pose.rotation()),
                                          gtsam::Point3(kf.pose.translation()));
 
-            // 生成 Scan Context
-            sc_manager_.makeAndSaveScancontextAndKeys(*kf.cloud);
-
-            // 保存关键帧并提取因子数据（锁内）
-            int prev_id, curr_id;
-            gtsam::Pose3 rel_pose;
-            bool is_first = false;
+            // 保存关键帧
             {
                 std::lock_guard<std::mutex> lock(kf_mutex_);
                 keyframes_.push_back(kf);
-                if (keyframes_.size() == 1) {
-                    is_first = true;
-                } else {
-                    auto& prev = keyframes_[keyframes_.size()-2];
-                    auto& curr = keyframes_.back();
-                    prev_id = prev.id;
-                    curr_id = curr.id;
-                    rel_pose = prev.gtsam_pose.between(curr.gtsam_pose);
-                }
             }
 
-            if (is_first) {
-                addPriorFactor(kf);
+            // 生成 Scan Context
+            sc_manager_.makeAndSaveScancontextAndKeys(*kf.cloud);
+
+            // 添加因子：第一个关键帧添加先验因子，后续添加里程计因子
+            if (keyframes_.size() == 1) {
+                node_ids_[kf.id] = next_node_id_++;
+                gtsam::NonlinearFactorGraph prior_graph;
+                auto prior_noise = gtsam::noiseModel::Diagonal::Sigmas(gtsam::Vector6::Constant(1e-6));
+                auto prior_factor = gtsam::PriorFactor<gtsam::Pose3>(
+                    node_ids_[kf.id], gtsam::Pose3::Identity(), prior_noise);
+                prior_graph.add(prior_factor);
+                gtsam::Values prior_values;
+                prior_values.insert(node_ids_[kf.id], kf.gtsam_pose);
+                isam_->update(prior_graph, prior_values);
+                RCLCPP_INFO(this->get_logger(), "Added prior factor for keyframe %d", kf.id);
             } else {
-                addFactor(prev_id, curr_id, rel_pose);
+                auto& prev = keyframes_[keyframes_.size()-2];
+                auto& curr = keyframes_.back();
+                gtsam::Pose3 rel_pose = prev.gtsam_pose.between(curr.gtsam_pose);
+                addFactor(prev.id, curr.id, rel_pose);
             }
 
             RCLCPP_INFO(this->get_logger(), "Added keyframe %d", kf.id);
@@ -213,27 +206,9 @@ private:
         return filtered;
     }
 
-    void addPriorFactor(const KeyFrame& kf) {
-        std::lock_guard<std::mutex> kf_lock(kf_mutex_);
-        std::lock_guard<std::mutex> g_lock(graph_mutex_);
-        node_ids_[kf.id] = next_node_id_++;
-        // Prior at ODOMETRY pose (not identity!) with moderate noise to anchor graph
-        // without pulling corrections back to origin on small movements
-        auto prior_noise = gtsam::noiseModel::Diagonal::Sigmas(
-            (gtsam::Vector(6) << 0.1, 0.1, 0.1, 0.05, 0.05, 0.05).finished());
-        gtsam::NonlinearFactorGraph prior_graph;
-        prior_graph.add(gtsam::PriorFactor<gtsam::Pose3>(
-            node_ids_[kf.id], kf.gtsam_pose, prior_noise));
-        gtsam::Values prior_values;
-        prior_values.insert(node_ids_[kf.id], kf.gtsam_pose);
-        isam_->update(prior_graph, prior_values);
-        RCLCPP_INFO(this->get_logger(), "Added prior factor for keyframe %d", kf.id);
-    }
-
     // 添加因子（里程计或回环），使用更合理的噪声模型
     void addFactor(int from_id, int to_id, const gtsam::Pose3& rel_pose) {
-        std::lock_guard<std::mutex> kf_lock(kf_mutex_);
-        std::lock_guard<std::mutex> g_lock(graph_mutex_);
+        std::lock_guard<std::mutex> lock(graph_mutex_);
         gtsam::NonlinearFactorGraph new_factors;
         gtsam::Values new_values;
 
@@ -271,48 +246,37 @@ private:
         while (rclcpp::ok() && loop_running_) {
             rate.sleep();
 
-            // Read keyframes under lock, extract candidates, then release before heavy work
-            int cand_id = -1, curr_id = -1;
-            pcl::PointCloud<PointType>::Ptr curr_cloud, cand_cloud;
-            bool has_loop = false;
+            std::lock_guard<std::mutex> lock(kf_mutex_);
+            if (keyframes_.size() < 10) continue;
 
-            {
-                std::lock_guard<std::mutex> lock(kf_mutex_);
-                if (keyframes_.size() < 10) continue;
+            int curr_idx = keyframes_.size() - 1;
+            auto loop_info = sc_manager_.detectLoopClosureID();
+            int candidate_idx = loop_info.first;
+            float score = loop_info.second;
+            (void)score;
 
-                int curr_idx = keyframes_.size() - 1;
-                auto loop_info = sc_manager_.detectLoopClosureID();
-                int candidate_idx = loop_info.first;
-                float score = loop_info.second;
-                (void)score;
-
-                if (candidate_idx >= 0 && candidate_idx < curr_idx - loop_min_index_diff_) {
-                    curr_cloud = keyframes_[curr_idx].cloud;
-                    cand_cloud = keyframes_[candidate_idx].cloud;
-                    cand_id = keyframes_[candidate_idx].id;
-                    curr_id = keyframes_[curr_idx].id;
-                    has_loop = true;
+            // 检查候选帧与当前帧的索引差，避免近距离匹配
+            if (candidate_idx >= 0 && candidate_idx < curr_idx - loop_min_index_diff_) {
+                const auto& curr_kf = keyframes_[curr_idx];
+                const auto& cand_kf = keyframes_[candidate_idx];
+                Eigen::Matrix4f rel_pose_eigen;
+                if (icpVerification(curr_kf.cloud, cand_kf.cloud, rel_pose_eigen)) {
+                    // 检查 ICP 结果是否过小（噪声导致）
+                    Eigen::Vector3f trans = rel_pose_eigen.block<3,1>(0,3);
+                    float rot_angle = std::acos(std::min(1.0f, (rel_pose_eigen.block<3,3>(0,0).trace() - 1.0f) / 2.0f));
+                    if (trans.norm() < icp_max_translation_ && rot_angle < icp_max_rotation_) {
+                        RCLCPP_WARN(this->get_logger(), "ICP transformation too small, ignoring loop closure (trans=%.3f, rot=%.3f)", trans.norm(), rot_angle);
+                        continue;
+                    }
+                    Eigen::Matrix4d rel_pose_d = rel_pose_eigen.cast<double>();
+                    gtsam::Pose3 rel_pose_gtsam(
+                        gtsam::Rot3(rel_pose_d.block<3,3>(0,0)),
+                        gtsam::Point3(rel_pose_d(0,3), rel_pose_d(1,3), rel_pose_d(2,3))
+                    );
+                    addFactor(cand_kf.id, curr_kf.id, rel_pose_gtsam);
+                    optimizeAndPublish();
+                    RCLCPP_INFO(this->get_logger(), "Loop closed between %d and %d", cand_kf.id, curr_kf.id);
                 }
-            }
-
-            if (!has_loop) continue;
-
-            Eigen::Matrix4f rel_pose_eigen;
-            if (icpVerification(curr_cloud, cand_cloud, rel_pose_eigen)) {
-                Eigen::Vector3f trans = rel_pose_eigen.block<3,1>(0,3);
-                float rot_angle = std::acos(std::min(1.0f, (rel_pose_eigen.block<3,3>(0,0).trace() - 1.0f) / 2.0f));
-                if (trans.norm() < icp_max_translation_ && rot_angle < icp_max_rotation_) {
-                    RCLCPP_WARN(this->get_logger(), "ICP transformation too small, ignoring (trans=%.3f, rot=%.3f)", trans.norm(), rot_angle);
-                    continue;
-                }
-                Eigen::Matrix4d rel_pose_d = rel_pose_eigen.cast<double>();
-                gtsam::Pose3 rel_pose_gtsam(
-                    gtsam::Rot3(rel_pose_d.block<3,3>(0,0)),
-                    gtsam::Point3(rel_pose_d(0,3), rel_pose_d(1,3), rel_pose_d(2,3))
-                );
-                addFactor(cand_id, curr_id, rel_pose_gtsam);
-                optimizeAndPublish();
-                RCLCPP_INFO(this->get_logger(), "Loop closed between %d and %d", cand_id, curr_id);
             }
         }
     }
@@ -336,8 +300,7 @@ private:
     }
 
     void optimizeAndPublish() {
-        std::lock_guard<std::mutex> kf_lock(kf_mutex_);
-        std::lock_guard<std::mutex> g_lock(graph_mutex_);
+        std::lock_guard<std::mutex> lock(graph_mutex_);
         gtsam::Values result = isam_->calculateEstimate();
 
         // 更新关键帧位姿
@@ -381,65 +344,22 @@ private:
 
     // 定时发布最新优化里程计（即使没有新回环，也能输出最新估计）
     void publishLatestOdom() {
-        Eigen::Isometry3d pose;
-        {
-            std::lock_guard<std::mutex> lock(graph_mutex_);
-            if (latest_optimized_pose_.translation().norm() == 0 && latest_optimized_pose_.rotation().determinant() == 0)
-                return; // 尚未初始化
-            pose = latest_optimized_pose_;
-        }
+        if (latest_optimized_pose_.translation().norm() == 0 && latest_optimized_pose_.rotation().determinant() == 0)
+            return; // 尚未初始化
         nav_msgs::msg::Odometry odom_msg;
         odom_msg.header.stamp = this->now();
         odom_msg.header.frame_id = "map";
         odom_msg.child_frame_id = "base_link";
-        odom_msg.pose.pose.position.x = pose.translation().x();
-        odom_msg.pose.pose.position.y = pose.translation().y();
-        odom_msg.pose.pose.position.z = pose.translation().z();
-        Eigen::Quaterniond q(pose.rotation());
+        odom_msg.pose.pose.position.x = latest_optimized_pose_.translation().x();
+        odom_msg.pose.pose.position.y = latest_optimized_pose_.translation().y();
+        odom_msg.pose.pose.position.z = latest_optimized_pose_.translation().z();
+        Eigen::Quaterniond q(latest_optimized_pose_.rotation());
         odom_msg.pose.pose.orientation.w = q.w();
         odom_msg.pose.pose.orientation.x = q.x();
         odom_msg.pose.pose.orientation.y = q.y();
         odom_msg.pose.pose.orientation.z = q.z();
+        // 可复制原始里程计的协方差或置零
         optimized_odom_pub_->publish(odom_msg);
-    }
-
-    void mapExportCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*req*/,
-                           std::shared_ptr<std_srvs::srv::Trigger::Response> res) {
-        std::lock_guard<std::mutex> kf_lock(kf_mutex_);
-        std::lock_guard<std::mutex> g_lock(graph_mutex_);
-
-        if (keyframes_.empty()) {
-            res->success = false;
-            res->message = "No keyframes to export";
-            return;
-        }
-
-        std::string path = this->get_parameter("map_export_path").as_string();
-        pcl::PointCloud<PointType> merged;
-
-        for (auto& kf : keyframes_) {
-            pcl::PointCloud<PointType> transformed;
-            Eigen::Affine3f T = kf.pose.cast<float>();
-            pcl::transformPointCloud(*kf.cloud, transformed, T);
-            merged += transformed;
-        }
-
-        pcl::VoxelGrid<PointType> voxel;
-        voxel.setInputCloud(merged.makeShared());
-        voxel.setLeafSize(0.3f, 0.3f, 0.3f);
-        pcl::PointCloud<PointType> filtered;
-        voxel.filter(filtered);
-
-        if (pcl::io::savePCDFileBinary(path, filtered) == -1) {
-            res->success = false;
-            res->message = "Failed to write PCD: " + path;
-        } else {
-            res->success = true;
-            res->message = "Saved " + std::to_string(filtered.size()) +
-                           " points from " + std::to_string(keyframes_.size()) +
-                           " keyframes → " + path;
-            RCLCPP_INFO(this->get_logger(), "%s", res->message.c_str());
-        }
     }
 
     // 成员变量
@@ -448,7 +368,6 @@ private:
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr optimized_path_pub_;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr optimized_odom_pub_;
     rclcpp::TimerBase::SharedPtr pub_timer_;
-    rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr map_export_srv_;
 
     nav_msgs::msg::Odometry::SharedPtr current_odom_;
     std::mutex odom_mutex_;

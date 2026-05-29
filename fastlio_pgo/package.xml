@@ -19,7 +19,6 @@
   <depend>Eigen3</depend>
   <depend>libpcl-all-dev</depend>
   <depend>gtsam</depend>   <!-- 添加 GTSAM 依赖 -->
-  <depend>std_srvs</depend>
 
   <export>
     <build_type>ament_cmake</build_type>

@@ -16,7 +16,6 @@ find_package(pcl_conversions REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(PCL REQUIRED)
 find_package(GTSAM REQUIRED)
-find_package(std_srvs REQUIRED)
 
 find_package(OpenCV REQUIRED)
 # 可选调试输出
@@ -45,7 +44,6 @@ add_executable(sc_pgo_node
 ament_target_dependencies(sc_pgo_node
   rclcpp
   std_msgs
-  std_srvs
   geometry_msgs
   nav_msgs
   sensor_msgs
