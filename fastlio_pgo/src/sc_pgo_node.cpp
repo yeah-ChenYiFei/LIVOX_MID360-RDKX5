@@ -217,10 +217,13 @@ private:
         std::lock_guard<std::mutex> kf_lock(kf_mutex_);
         std::lock_guard<std::mutex> g_lock(graph_mutex_);
         node_ids_[kf.id] = next_node_id_++;
-        auto prior_noise = gtsam::noiseModel::Diagonal::Sigmas(gtsam::Vector6::Constant(1e-6));
+        // Prior at ODOMETRY pose (not identity!) with moderate noise to anchor graph
+        // without pulling corrections back to origin on small movements
+        auto prior_noise = gtsam::noiseModel::Diagonal::Sigmas(
+            (gtsam::Vector(6) << 0.1, 0.1, 0.1, 0.05, 0.05, 0.05).finished());
         gtsam::NonlinearFactorGraph prior_graph;
         prior_graph.add(gtsam::PriorFactor<gtsam::Pose3>(
-            node_ids_[kf.id], gtsam::Pose3::Identity(), prior_noise));
+            node_ids_[kf.id], kf.gtsam_pose, prior_noise));
         gtsam::Values prior_values;
         prior_values.insert(node_ids_[kf.id], kf.gtsam_pose);
         isam_->update(prior_graph, prior_values);
