@@ -97,9 +97,9 @@ def generate_launch_description():
             'ring_max_points': 800,
             'pillar_l2_l1_max': 0.35,
             'pillar_l1_l3_min': 8.0,
-            # multi-frame accumulation — short window avoids ghosting during rotation
-            'accumulate_window': 0.3,
-            'accumulate_voxel': 0.03,
+            # multi-frame accumulation — long window for dense ring, rotation gated in code
+            'accumulate_window': 1.5,
+            'accumulate_voxel': 0.02,
             # RANSAC (after fusion — ring is dense enough to survive)
             'ground_removal_enabled': True,
             'wall_removal_enabled': True,

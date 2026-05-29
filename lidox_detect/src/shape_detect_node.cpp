@@ -4,12 +4,14 @@
  *
  * Subscribes: /lidox/filtered_cloud  (PointCloud2, base_link)
  *             /Odometry              (Odometry)
+ *             /livox/imu             (Imu — angular velocity for rotation gate)
  * Publishes:  /lidox/ring_center     (PoseStamped, base_link)
  *             /lidox/pillar_center   (PoseStamped, base_link)
  */
 
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <sensor_msgs/msg/imu.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 
@@ -98,6 +100,10 @@ public:
             "/Odometry", 10,
             std::bind(&ShapeDetectNode::on_odom, this, std::placeholders::_1));
 
+        imu_sub_ = create_subscription<sensor_msgs::msg::Imu>(
+            "/livox/imu", 10,
+            std::bind(&ShapeDetectNode::on_imu, this, std::placeholders::_1));
+
         ring_pub_   = create_publisher<geometry_msgs::msg::PoseStamped>(
             "/lidox/ring_center", 10);
         pillar_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>(
@@ -132,6 +138,14 @@ private:
         std::lock_guard<std::mutex> lock(pose_mutex_);
         latest_pose_ = T;
         has_pose_ = true;
+    }
+
+    // ── IMU angular velocity ────────────────────────
+    void on_imu(const sensor_msgs::msg::Imu::SharedPtr msg) {
+        double wx = msg->angular_velocity.x;
+        double wy = msg->angular_velocity.y;
+        double wz = msg->angular_velocity.z;
+        angular_speed_ = std::sqrt(wx*wx + wy*wy + wz*wz);
     }
 
     // ── cloud + accumulation ────────────────────────
@@ -185,10 +199,16 @@ private:
         Eigen::Isometry3d T_w_b = latest.pose;  // world←base at latest frame
         Eigen::Isometry3d T_b_w = T_w_b.inverse();
 
+        // Rotation gate: during fast rotation, use short window to avoid ghosting
+        static constexpr double ROT_FAST  = 0.35;  // rad/s ≈ 20°/s
+        static constexpr double WIN_FAST  = 0.3;   // seconds
+        double cutoff = latest.stamp - (angular_speed_ > ROT_FAST ? WIN_FAST : accumulate_window_);
+
         PointCloudT::Ptr merged(new PointCloudT);
 
         for (auto &cf : buffer_) {
             if (cf.cloud->empty()) continue;
+            if (cf.stamp < cutoff) continue;
 
             if (has_pose_ && cf.cloud != latest.cloud) {
                 // transform cf.cloud (base_link@t_i) → base_link@t_latest
@@ -499,6 +519,7 @@ private:
     // ── members ─────────────────────────────────────
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_sub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+    rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr  ring_pub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr  pillar_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr    merged_pub_;
@@ -517,6 +538,7 @@ private:
     // multi-frame accumulation
     double accumulate_window_, accumulate_voxel_;
     std::deque<CloudFrame> buffer_;
+    double angular_speed_ = 0.0;
     Eigen::Isometry3d latest_pose_ = Eigen::Isometry3d::Identity();
     bool has_pose_ = false;
     std::mutex pose_mutex_;
