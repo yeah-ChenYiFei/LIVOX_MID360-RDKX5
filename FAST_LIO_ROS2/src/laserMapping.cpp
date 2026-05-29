@@ -440,22 +440,16 @@ bool sync_packages(MeasureGroup &meas)
         lidar_pushed = true;
     }
 
-    // ── clock drift compensation ──
-    // When LiDAR timestamps lead IMU, skip waiting and just use available IMU data.
-    // IEKF backward-propagation handles partial coverage gracefully.
     if (last_timestamp_imu < lidar_end_time)
     {
-        if (imu_buffer.empty()) {
-            return false;
-        }
-        // Proceed with incomplete IMU coverage instead of stalling
-        static int skip_stall = 0;
-        if (++skip_stall % 100 == 0) {
-            printf("[sync] skipping stall: last_imu=%.3f < lidar_end=%.3f gap=%.3fs\n",
-                   last_timestamp_imu, lidar_end_time,
-                   lidar_end_time - last_timestamp_imu);
+        // ── diagnostic: log stall when IMU hasn't caught up ──
+        static int stall_count = 0;
+        if (++stall_count % 100 == 0) {
+            printf("[sync_diag] STALL x%d: waiting for IMU, last_imu=%.3f < lidar_end=%.3f gap=%.3fs\n",
+                   stall_count, last_timestamp_imu, lidar_end_time, lidar_end_time - last_timestamp_imu);
             fflush(stdout);
         }
+        return false;
     }
 
     /*** push imu data, and pop from imu buffer ***/
