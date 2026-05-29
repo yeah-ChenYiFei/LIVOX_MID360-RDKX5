@@ -74,23 +74,37 @@ private:
         Eigen::Isometry3d T_pgo = odomToIsometry(*msg);
         Eigen::Isometry3d corr = T_pgo * T_raw.inverse();
 
-        // EMA-smooth the correction to suppress SC-PGO optimization jitter
-        static constexpr double ALPHA = 0.3;
+        double dp = corr.translation().norm();
+        Eigen::AngleAxisd aa(corr.rotation());
+        double dr = std::abs(aa.angle());
+
+        // Dead zone: ISAM2 jitter during stationary → ignore
+        static constexpr double DP_DEAD = 0.10;
+        static constexpr double DR_DEAD = 0.05;
+        if (dp < DP_DEAD && dr < DR_DEAD) return;
+
+        // Big correction = real loop closure; small = gradual update
+        double alpha = (dp > 0.5 || dr > 0.1) ? 0.5 : 0.15;
+
+        // EMA-smooth the correction
         static bool has_smooth = false;
         static Eigen::Isometry3d T_smooth = Eigen::Isometry3d::Identity();
         if (!has_smooth) {
             T_smooth = corr;
             has_smooth = true;
         } else {
-            T_smooth.translation() = ALPHA * corr.translation() + (1.0 - ALPHA) * T_smooth.translation();
+            T_smooth.translation() = alpha * corr.translation() + (1.0 - alpha) * T_smooth.translation();
             Eigen::Quaterniond q_corr(corr.rotation());
             Eigen::Quaterniond q_smooth(T_smooth.rotation());
-            T_smooth.linear() = q_smooth.slerp(ALPHA, q_corr).toRotationMatrix();
+            T_smooth.linear() = q_smooth.slerp(alpha, q_corr).toRotationMatrix();
         }
 
         std::lock_guard<std::mutex> lock(corr_mutex_);
         T_correction_ = T_smooth;
         has_correction_ = true;
+
+        RCLCPP_INFO(this->get_logger(),
+            "PGO corr: dp=%.3fm dr=%.1f° alpha=%.2f", dp, dr * 180.0 / M_PI, alpha);
 
         RCLCPP_DEBUG(this->get_logger(),
             "PGO correction update: dp=(%.3f,%.3f,%.3f)",

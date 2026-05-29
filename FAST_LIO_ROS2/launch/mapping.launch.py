@@ -43,12 +43,17 @@ def generate_launch_description():
         description='RViz config file path'
     )
 
+    # Try to set realtime priority via wrapper; silently fall back to normal if chrt unavailable
     fast_lio_node = Node(
         package='fast_lio',
         executable='fastlio_mapping',
+        name='fastlio_mapping',
         parameters=[PathJoinSubstitution([config_path, config_file]),
                     {'use_sim_time': use_sim_time}],
-        output='screen'
+        output='screen',
+        emulate_tty=True,
+        arguments=['--ros-args', '--log-level', 'info'],
+        prefix=['bash', '-c', 'chrt --fifo 50 exec "$@" 2>/dev/null || exec "$@"', '--'],
     )
     rviz_node = Node(
         package='rviz2',

@@ -10,6 +10,9 @@ WorkingDirectory=/home/sunrise/livox_ws
 Environment="ROS_DISTRO=humble"
 Environment="ROS_DOMAIN_ID=0"
 Environment="ROS_LOCALHOST_ONLY=0"
+# Allow realtime scheduling (chrt --fifo) for FAST-LIO to avoid latency spikes
+LimitRTPRIO=99
+LimitNICE=-20
 ExecStartPre=/bin/bash -c "source /opt/ros/humble/setup.bash && for i in $(seq 1 90); do ros2 topic list 2>/dev/null | grep -q /livox/lidar && exit 0; sleep 1; done; exit 1"
 ExecStart=/bin/bash -c "source /opt/ros/humble/setup.bash && source /home/sunrise/livox_ws/install/setup.bash && ros2 launch fastlio_imu run_fastlio_imu.launch.py"
 Restart=on-failure
