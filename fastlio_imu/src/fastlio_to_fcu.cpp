@@ -114,7 +114,7 @@ private:
     void processAndPublish(const nav_msgs::msg::Odometry::SharedPtr msg, bool /*from_raw*/) {
         // msg is already corrected by caller (localized_callback passes ICP-corrected;
         // odom_callback passes PGO-corrected). No further correction applied here.
-        const nav_msgs::msg::Odometry& corrected = *msg;
+        nav_msgs::msg::Odometry corrected = *msg;
 
         // --- compute speed (used by both watchdogs) ---
         double lvx = corrected.twist.twist.linear.x;
@@ -217,7 +217,10 @@ private:
         {
             std::lock_guard<std::mutex> lock(ring_mutex_);
             if (!has_ring_) {
-                ring_world_out = ring_ema_;
+                ring_world_out.position.x = ring_ema_.x();
+                ring_world_out.position.y = ring_ema_.y();
+                ring_world_out.position.z = ring_ema_.z();
+                ring_world_out.orientation.w = 1.0;
                 return;
             }
             ring_bl = latest_ring_;
