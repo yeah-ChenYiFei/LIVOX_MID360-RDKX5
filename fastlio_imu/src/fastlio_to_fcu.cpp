@@ -74,8 +74,22 @@ private:
         Eigen::Isometry3d T_pgo = odomToIsometry(*msg);
         Eigen::Isometry3d corr = T_pgo * T_raw.inverse();
 
+        // EMA-smooth the correction to suppress SC-PGO optimization jitter
+        static constexpr double ALPHA = 0.3;
+        static bool has_smooth = false;
+        static Eigen::Isometry3d T_smooth = Eigen::Isometry3d::Identity();
+        if (!has_smooth) {
+            T_smooth = corr;
+            has_smooth = true;
+        } else {
+            T_smooth.translation() = ALPHA * corr.translation() + (1.0 - ALPHA) * T_smooth.translation();
+            Eigen::Quaterniond q_corr(corr.rotation());
+            Eigen::Quaterniond q_smooth(T_smooth.rotation());
+            T_smooth.linear() = q_smooth.slerp(ALPHA, q_corr).toRotationMatrix();
+        }
+
         std::lock_guard<std::mutex> lock(corr_mutex_);
-        T_correction_ = corr;
+        T_correction_ = T_smooth;
         has_correction_ = true;
 
         RCLCPP_DEBUG(this->get_logger(),
