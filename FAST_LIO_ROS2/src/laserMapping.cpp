@@ -1191,13 +1191,14 @@ private:
             /******* Publish odometry *******/
             publish_odometry(pubOdomAftMapped_, tf_broadcaster_);
 
-            // ── diagnostic: end-to-end latency (wall clock - lidar scan time) ──
+            // ── diagnostic: end-to-end latency ──
             static int lat_count = 0;
             if (++lat_count % 20 == 0) {
-                double now_wall = omp_get_wtime();
-                double lat = now_wall - Measures.lidar_end_time;
-                printf("[latency] frame #%d: lidar_end=%.3f now=%.3f E2E_latency=%.3fs\n",
-                       scan_num, Measures.lidar_end_time, now_wall, lat);
+                static double first_lidar = 0, first_wall = 0;
+                if (first_lidar == 0) { first_lidar = Measures.lidar_end_time; first_wall = omp_get_wtime(); }
+                double lat = (omp_get_wtime() - first_wall) - (Measures.lidar_end_time - first_lidar);
+                printf("[latency] frame #%d: E2E=%.3fs proc=%.3fs\n",
+                       scan_num, lat, omp_get_wtime() - t0);
                 fflush(stdout);
             }
 
