@@ -440,16 +440,32 @@ bool sync_packages(MeasureGroup &meas)
         lidar_pushed = true;
     }
 
-    if (last_timestamp_imu < lidar_end_time)
+    // ── clock drift compensation ──
+    // LiDAR header timestamp and IMU timestamp use different clock sources.
+    // Track the running offset and compensate so we don't stall every frame.
     {
-        // ── diagnostic: log stall when IMU hasn't caught up ──
-        static int stall_count = 0;
-        if (++stall_count % 100 == 0) {
-            printf("[sync_diag] STALL x%d: waiting for IMU, last_imu=%.3f < lidar_end=%.3f gap=%.3fs\n",
-                   stall_count, last_timestamp_imu, lidar_end_time, lidar_end_time - last_timestamp_imu);
-            fflush(stdout);
+        static double clock_offset = 0.0;
+        static int    offset_cnt = 0;
+        double raw = lidar_end_time - last_timestamp_imu;
+        if (offset_cnt == 0) {
+            clock_offset = raw;
+        } else {
+            clock_offset = 0.005 * raw + 0.995 * clock_offset;
         }
-        return false;
+        offset_cnt++;
+
+        double adjusted_end = lidar_end_time - clock_offset;
+        if (last_timestamp_imu < adjusted_end)
+        {
+            static int stall_count = 0;
+            if (++stall_count % 100 == 0) {
+                printf("[sync_diag] STALL x%d: last_imu=%.3f < adj_end=%.3f gap=%.3fs offset=%.3f\n",
+                       stall_count, last_timestamp_imu, adjusted_end,
+                       adjusted_end - last_timestamp_imu, clock_offset);
+                fflush(stdout);
+            }
+            return false;
+        }
     }
 
     /*** push imu data, and pop from imu buffer ***/
