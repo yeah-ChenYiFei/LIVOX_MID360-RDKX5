@@ -440,13 +440,15 @@ bool sync_packages(MeasureGroup &meas)
         lidar_pushed = true;
     }
 
-    if (last_timestamp_imu < lidar_end_time)
+    // Only stall when no IMU data at all — otherwise proceed with available data.
+    // MID360 built-in IMU can have sub-ms clock drift vs LiDAR timestamp,
+    // and waiting for "future" IMU data causes multi-second pipeline gaps.
+    if (imu_buffer.empty())
     {
-        // ── diagnostic: log stall when IMU hasn't caught up ──
         static int stall_count = 0;
         if (++stall_count % 100 == 0) {
-            printf("[sync_diag] STALL x%d: waiting for IMU, last_imu=%.3f < lidar_end=%.3f gap=%.3fs\n",
-                   stall_count, last_timestamp_imu, lidar_end_time, lidar_end_time - last_timestamp_imu);
+            printf("[sync_diag] STALL x%d: imu_buffer empty, lidar_end=%.3f\n",
+                   stall_count, lidar_end_time);
             fflush(stdout);
         }
         return false;
