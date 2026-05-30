@@ -57,7 +57,6 @@ class RosToSerialNode(Node):
         super().__init__("ros_to_serial_node")
 
         # --- serial port ---
-        self._ser_lock = threading.Lock()
         try:
             self.ser = serial.Serial(port=SERIAL_PORT, baudrate=BAUD_RATE, timeout=0.1)
             self.get_logger().info(f"串口打开: {SERIAL_PORT} @ {BAUD_RATE} bps")
@@ -99,9 +98,12 @@ class RosToSerialNode(Node):
         buf = bytearray()
         while self._recv_running:
             try:
-                with self._ser_lock:
-                    data = self.ser.read(1)
+                if not self.ser.is_open:
+                    break
+                # read without lock — pySerial is thread-safe on Linux
+                data = self.ser.read(1)
                 if not data:
+                    time.sleep(0.002)
                     continue
                 buf.append(data[0])
 
@@ -195,8 +197,8 @@ class RosToSerialNode(Node):
                 self._latest_frame = None
             if frame is not None:
                 try:
-                    with self._ser_lock:
-                        self.ser.write(frame)
+                    self.ser.write(frame)
+                    self.ser.flush()
                 except Exception as e:
                     self.get_logger().error(f"串口发送失败: {e}")
 
