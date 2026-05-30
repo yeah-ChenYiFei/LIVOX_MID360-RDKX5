@@ -69,11 +69,20 @@ class RosToSerialNode(Node):
         self.subscription = self.create_subscription(
             FcuState, TOPIC_NAME, self._on_fcu_state, 10)
 
+        # --- sender queue (capacity 1, drop old) ---
+        self._latest_frame = None
+        self._frame_cond = threading.Condition()
+        self._send_running = True
+
         self._recv_running = True
 
         # --- servo ---
         servo.init()
         time.sleep(0.3)
+
+        # --- FCU send thread (non-blocking for callback) ---
+        self._send_thread = threading.Thread(target=self._serial_send_loop, daemon=True)
+        self._send_thread.start()
 
         # --- FCU receive thread ---
         self._recv_thread = threading.Thread(target=self._serial_recv_loop, daemon=True)
@@ -82,7 +91,7 @@ class RosToSerialNode(Node):
         self.get_logger().info(
             f"订阅: {TOPIC_NAME}  |  "
             f"环数据: {'随机测试' if TEST_RING else '世界系(world frame)'}  |  "
-            f"串口接收已启动"
+            f"串口收发已启动"
         )
 
     # ---- FCU -> PC receive thread ----
@@ -120,7 +129,7 @@ class RosToSerialNode(Node):
                 self.get_logger().warn(f"串口接收异常: {e}")
                 time.sleep(0.01)
 
-    # ---- PC -> FCU: FcuState callback ----
+    # ---- PC -> FCU: FcuState callback (fast, no serial I/O) ----
     def _on_fcu_state(self, msg: FcuState):
         try:
             x  = msg.pose.position.x
@@ -146,45 +155,53 @@ class RosToSerialNode(Node):
             vel_data = struct.pack("<6d", vx, vy, vz, wx, wy, wz)
 
             # ring / spot data (world frame, origin = takeoff point)
-            ring_zeros = False
             if SEND_RING:
                 if not TEST_RING:
                     rx = msg.ring_world.position.x
                     ry = msg.ring_world.position.y
                     rz = msg.ring_world.position.z
-                    ring_zeros = (rx == 0.0 and ry == 0.0 and rz == 0.0)
                 elif TEST_RING:
                     rx = random.uniform(-15.0, 15.0)
                     ry = random.uniform(-15.0, 15.0)
                     rz = random.uniform(0.0, 10.0)
-                    ring_zeros = False
                 else:
                     rx = ry = rz = 0.0
-                    ring_zeros = True
                 spot_data = struct.pack("<3d", rx, ry, rz)
 
-            # assemble & send
+            # assemble
             frame = FRAME_HEAD + POS_FLAG + pos_data + VEL_FLAG + vel_data
             if SEND_RING:
                 frame += SPOT_FLAG + spot_data
-            with self._ser_lock:
-                self.ser.write(frame)
 
-            ring_str = f"ring=({rx:.1f},{ry:.1f},{rz:.1f})" if SEND_RING else "ring=OFF"
-            if ring_zeros:
-                ring_str += " [WARN: no detection]"
+            # non-blocking: push to sender thread
+            with self._frame_cond:
+                self._latest_frame = frame
+                self._frame_cond.notify()
+
             self.get_logger().debug(
                 f"TX {len(frame)}B  "
-                f"pos=({x:.2f},{y:.2f},{z:.2f}) yaw={yaw:.2f}rad  "
-                f"{ring_str}"
+                f"pos=({x:.2f},{y:.2f},{z:.2f}) yaw={yaw:.2f}rad"
             )
 
         except Exception as e:
-            self.get_logger().error(f"发送失败: {e}")
-            import traceback
-            traceback.print_exc()
+            self.get_logger().error(f"打包失败: {e}")
+
+    # ---- dedicated serial send thread ----
+    def _serial_send_loop(self):
+        while self._send_running:
+            with self._frame_cond:
+                self._frame_cond.wait(timeout=0.1)
+                frame = self._latest_frame
+                self._latest_frame = None
+            if frame is not None:
+                try:
+                    with self._ser_lock:
+                        self.ser.write(frame)
+                except Exception as e:
+                    self.get_logger().error(f"串口发送失败: {e}")
 
     def close_serial(self):
+        self._send_running = False
         self._recv_running = False
         if hasattr(self, "ser") and self.ser.is_open:
             self.ser.close()
