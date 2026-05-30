@@ -217,7 +217,10 @@ private:
         // Build FcuState
         fastlio_imu::msg::FcuState fcu_msg;
         fcu_msg.header = msg->header;
-        fcu_msg.pose = corrected.pose.pose;
+        {
+            std::lock_guard<std::mutex> lock(raw_mutex_);
+            fcu_msg.pose = has_raw_odom_ ? raw_odom_.pose.pose : corrected.pose.pose;
+        }
         fcu_msg.twist.linear = corrected.twist.twist.linear;
         fcu_msg.ring_world = ring_world;
 
