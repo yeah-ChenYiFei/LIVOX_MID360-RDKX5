@@ -49,14 +49,6 @@ def generate_launch_description():
     )
 
 
-    ros_to_serial_node = Node(
-        package='fastlio_imu',
-        executable='ros_to_serial.py',
-        name='ros_to_serial_node',
-        output='screen',
-    )
-
-
     map_localizer_node = Node(
         package='fastlio_imu',
         executable='map_localizer',
@@ -72,7 +64,6 @@ def generate_launch_description():
         # livox_launch,
         fastlio_launch,
         forward_node,
-        ros_to_serial_node,
         sc_pgo_launch,
         map_localizer_node,
     ])
