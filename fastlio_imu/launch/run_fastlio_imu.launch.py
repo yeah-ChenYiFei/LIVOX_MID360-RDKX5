@@ -57,58 +57,6 @@ def generate_launch_description():
     )
 
 
-    cloud_filter_node = Node(
-        package='lidox_detect',
-        executable='cloud_filter_node',
-        name='cloud_filter_node',
-        output='screen',
-        parameters=[{
-            # XY: focus on ring ~1m ahead, narrow lateral window
-            'x_min': 0.0,
-            'x_max': 1.8,
-            'y_min': -0.7,
-            'y_max': 0.7,
-            # Z: full ring vertical span (drone at any reasonable height)
-            'z_min': -0.6,
-            'z_max': 1.5,
-            # voxel
-            'voxel_leaf': 0.02,
-            # SOR: remove sparse mesh points, keep dense ring surface
-            'sor_enabled': True,
-            'sor_mean_k': 20,
-            'sor_stddev': 1.0,
-        }]
-    )
-
-    shape_detect_node = Node(
-        package='lidox_detect',
-        executable='shape_detect_node',
-        name='shape_detect_node',
-        output='screen',
-        parameters=[{
-            'cluster_tolerance': 0.12,
-            'min_cluster_size_ring': 40,
-            'min_cluster_size_pillar': 80,
-            'max_cluster_size': 8000,
-            'ring_fit_tolerance': 0.08,
-            'ring_inner_radius': 0.40,
-            'ring_outer_radius': 0.70,
-            'ring_inlier_ratio_min': 0.45,
-            'ring_max_points': 800,
-            'pillar_l2_l1_max': 0.35,
-            'pillar_l1_l3_min': 8.0,
-            # multi-frame accumulation — long window for dense ring, rotation gated in code
-            'accumulate_window': 1.5,
-            'accumulate_voxel': 0.02,
-            # RANSAC (after fusion — ring is dense enough to survive)
-            'ground_removal_enabled': True,
-            'wall_removal_enabled': True,
-            'ransac_dist_thresh': 0.03,
-            'ransac_ground_nz_min': 0.7,
-            'ransac_wall_min_ratio': 0.30,
-        }]
-    )
-
     map_localizer_node = Node(
         package='fastlio_imu',
         executable='map_localizer',
@@ -126,7 +74,5 @@ def generate_launch_description():
         forward_node,
         ros_to_serial_node,
         sc_pgo_launch,
-        cloud_filter_node,
-        shape_detect_node,
         map_localizer_node,
     ])
