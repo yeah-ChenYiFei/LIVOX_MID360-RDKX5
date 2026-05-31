@@ -1,7 +1,7 @@
 [Unit]
 Description=Ring Detection (cloud filter + shape detect)
 After=ros_lio.service
-Wants=ros_lio.service
+Requires=ros_lio.service
 
 [Service]
 Type=simple
