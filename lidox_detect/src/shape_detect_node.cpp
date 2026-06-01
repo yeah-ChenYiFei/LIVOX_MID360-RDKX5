@@ -338,9 +338,8 @@ private:
         Eigen::Vector3f best_center(0, 0, 0);
         float best_r = 0;
 
-        try_plane(0, 1, 2, cluster, n, best_center, best_r, best_ratio);  // XY
+        // ring is perpendicular to Y-axis → points lie in XZ plane only
         try_plane(0, 2, 1, cluster, n, best_center, best_r, best_ratio);  // XZ
-        try_plane(1, 2, 0, cluster, n, best_center, best_r, best_ratio);  // YZ
 
         if (best_ratio < ring_inlier_min_) {
             RCLCPP_DEBUG(get_logger(),
@@ -379,7 +378,7 @@ private:
             return true;
         };
 
-        int iter = std::min(200, n * 5);
+        int iter = std::min(600, n * 15);
         for (int k = 0; k < iter; k++) {
             int i1 = rng() % n;
             int i2 = rng() % n, i3 = rng() % n;
