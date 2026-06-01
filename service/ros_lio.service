@@ -9,7 +9,7 @@ Type=simple
 WorkingDirectory=/home/sunrise/livox_ws
 Environment="ROS_DISTRO=humble"
 Environment="ROS_DOMAIN_ID=0"
-Environment="ROS_LOCALHOST_ONLY=0"
+Environment="ROS_LOCALHOST_ONLY=1"
 # Allow realtime scheduling (chrt --fifo) for FAST-LIO to avoid latency spikes
 LimitRTPRIO=99
 LimitNICE=-20

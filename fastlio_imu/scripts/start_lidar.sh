@@ -31,6 +31,9 @@ while ! ping -c 1 -W 2 "$LIDAR_IP" >/dev/null 2>&1; do
 done
 echo "雷达网络已就绪"
 
+# 固化 eth0 中断到 CPU1，留 CPU0 给 WiFi SDIO 中断
+echo 2 | sudo tee /proc/irq/38/smp_affinity > /dev/null
+
 # === 核心改造：安全的时间初始化策略 ===
 echo "检查系统时间有效性..."
 CURRENT_YEAR=$(date +%Y)
