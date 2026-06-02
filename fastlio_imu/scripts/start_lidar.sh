@@ -15,6 +15,9 @@ RETRY_DELAY=5
 # 0. 封印系统的自动NTP，防止运行中连WiFi导致时间突变崩溃
 sudo systemctl stop ntp.service 2>/dev/null
 
+# 关闭 WiFi 省电模式，防止雷达上电后信号弱时断连
+sudo iwconfig wlan0 power off 2>/dev/null
+
 # 等待网络和雷达就绪
 while ! ip link show "$INTERFACE" | grep -q "state UP"; do
     echo "等待网卡 $INTERFACE 启动..."
