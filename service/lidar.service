@@ -5,7 +5,7 @@ After=network-online.target time-sync.target
 [Service]
 Type=simple
 Environment="ROS_DOMAIN_ID=0"
-Environment="ROS_LOCALHOST_ONLY=1"
+Environment="ROS_LOCALHOST_ONLY=0"
 CPUAffinity=0-1
 ExecStart=/home/sunrise/livox_ws/src/fastlio_imu/scripts/start_lidar.sh
 Restart=on-failure
