@@ -15,6 +15,9 @@ RETRY_DELAY=5
 # 0. 封印系统的自动NTP，防止运行中连WiFi导致时间突变崩溃
 sudo systemctl stop ntp.service 2>/dev/null
 
+# 0.5 让 NM 别管 eth0，避免 eth0 上线时抢路由导致 WiFi 断连
+sudo nmcli device set eth0 managed no 2>/dev/null
+
 # 等待网络和雷达就绪
 while ! ip link show "$INTERFACE" | grep -q "state UP"; do
     echo "等待网卡 $INTERFACE 启动..."
