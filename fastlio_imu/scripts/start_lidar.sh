@@ -15,9 +15,6 @@ RETRY_DELAY=5
 # 0. 封印系统的自动NTP，防止运行中连WiFi导致时间突变崩溃
 sudo systemctl stop ntp.service 2>/dev/null
 
-# 关闭 WiFi 省电模式，防止雷达上电后信号弱时断连
-sudo iwconfig wlan0 power off 2>/dev/null
-
 # 等待网络和雷达就绪
 while ! ip link show "$INTERFACE" | grep -q "state UP"; do
     echo "等待网卡 $INTERFACE 启动..."
@@ -34,8 +31,6 @@ while ! ping -c 1 -W 2 "$LIDAR_IP" >/dev/null 2>&1; do
 done
 echo "雷达网络已就绪"
 
-# 中断隔离：eth0 → CPU1，雷达驱动在 CPU 1-2，CPU0 留给 WiFi 外设
-echo 2 | sudo tee /proc/irq/38/smp_affinity > /dev/null
 
 # === 核心改造：安全的时间初始化策略 ===
 echo "检查系统时间有效性..."
