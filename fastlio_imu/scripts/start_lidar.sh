@@ -34,9 +34,8 @@ while ! ping -c 1 -W 2 "$LIDAR_IP" >/dev/null 2>&1; do
 done
 echo "雷达网络已就绪"
 
-# 中断隔离：eth0 → CPU1, WiFi SDIO → CPU2，避免挤占 CPU0 导致断连
-echo 2 | sudo tee /proc/irq/38/smp_affinity > /dev/null  # eth0 → CPU1
-echo 4 | sudo tee /proc/irq/41/smp_affinity > /dev/null  # mmc2 (WiFi SDIO) → CPU2
+# 中断隔离：eth0 → CPU1，雷达驱动在 CPU 1-2，CPU0 留给 WiFi 外设
+echo 2 | sudo tee /proc/irq/38/smp_affinity > /dev/null
 
 # === 核心改造：安全的时间初始化策略 ===
 echo "检查系统时间有效性..."
