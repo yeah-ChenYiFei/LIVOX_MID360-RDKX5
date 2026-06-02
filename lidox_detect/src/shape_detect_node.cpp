@@ -81,7 +81,7 @@ public:
         pillar_l1l3_min_ = declare("pillar_l1_l3_min",      8.0);
 
         // ── multi-frame accumulation ────────────────────
-        accumulate_window_ = declare("accumulate_window",   1.5);
+        accumulate_window_ = declare("accumulate_window",   0.8);
         accumulate_voxel_  = declare("accumulate_voxel",    0.02);
 
         // ── RANSAC (after fusion, before clustering) ────
@@ -549,8 +549,8 @@ private:
     // temporal consistency
     std::vector<TrackedRing> tracked_;
     float temporal_tol_ = 0.15f;
-    int confirm_frames_ = 3;
-    int stale_frames_ = 5;
+    int confirm_frames_ = 1;
+    int stale_frames_ = 3;
 };
 
 
