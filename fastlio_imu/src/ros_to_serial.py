@@ -198,7 +198,6 @@ class RosToSerialNode(Node):
             if frame is not None:
                 try:
                     self.ser.write(frame)
-                    self.ser.flush()
                 except Exception as e:
                     self.get_logger().error(f"串口发送失败: {e}")
 
