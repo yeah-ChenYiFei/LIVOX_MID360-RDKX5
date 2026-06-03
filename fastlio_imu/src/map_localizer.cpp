@@ -17,10 +17,10 @@ class MapLocalizer : public rclcpp::Node {
 public:
     MapLocalizer() : Node("map_localizer") {
         this->declare_parameter("map_file", "");
-        this->declare_parameter("map_voxel", 0.5);
-        this->declare_parameter("scan_voxel", 0.2);
-        this->declare_parameter("icp_max_corr_dist", 2.0);
-        this->declare_parameter("icp_max_iter", 50);
+        this->declare_parameter("map_voxel", 0.8);
+        this->declare_parameter("scan_voxel", 0.4);
+        this->declare_parameter("icp_max_corr_dist", 1.0);
+        this->declare_parameter("icp_max_iter", 25);
         this->declare_parameter("icp_fitness_thresh", 0.3);
         this->declare_parameter("min_scan_points", 100);
         this->declare_parameter("map_x", 0.0);
