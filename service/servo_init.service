@@ -1,0 +1,14 @@
+[Unit]
+Description=Servo Init to 0deg on Boot
+After=multi-user.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/sunrise/livox_ws/src/fastlio_imu/src
+ExecStart=/usr/bin/python3 -c "import servo_control; servo_control.init()"
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
