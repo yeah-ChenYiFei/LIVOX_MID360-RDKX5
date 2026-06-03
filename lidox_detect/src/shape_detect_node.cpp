@@ -82,7 +82,7 @@ public:
 
         // ── multi-frame accumulation ────────────────────
         accumulate_window_ = declare("accumulate_window",   0.8);
-        accumulate_voxel_  = declare("accumulate_voxel",    0.02);
+        accumulate_voxel_  = declare("accumulate_voxel",    0.03);
 
         // ── RANSAC (after fusion, before clustering) ────
         ground_removal_en_ = declare("ground_removal_enabled",  true);
@@ -378,7 +378,7 @@ private:
             return true;
         };
 
-        int iter = std::min(600, n * 15);
+        int iter = std::min(300, n * 10);
         for (int k = 0; k < iter; k++) {
             int i1 = rng() % n;
             int i2 = rng() % n, i3 = rng() % n;
