@@ -23,6 +23,10 @@ public:
         this->declare_parameter("icp_max_iter", 50);
         this->declare_parameter("icp_fitness_thresh", 0.3);
         this->declare_parameter("min_scan_points", 100);
+        this->declare_parameter("map_x", 0.0);
+        this->declare_parameter("map_y", 0.0);
+        this->declare_parameter("map_z", 0.0);
+        this->declare_parameter("map_yaw", 0.0);  // radians, CCW around origin
 
         std::string map_file = this->get_parameter("map_file").as_string();
         if (map_file.empty()) {
@@ -35,6 +39,16 @@ public:
             RCLCPP_ERROR(this->get_logger(), "Failed to load %s", map_file.c_str());
             return;
         }
+
+        // apply map origin offset (translation + yaw rotation CCW around Z)
+        double map_x = this->get_parameter("map_x").as_double();
+        double map_y = this->get_parameter("map_y").as_double();
+        double map_z = this->get_parameter("map_z").as_double();
+        double map_yaw = this->get_parameter("map_yaw").as_double();
+        Eigen::Isometry3d T_map = Eigen::Isometry3d::Identity();
+        T_map.translation() = Eigen::Vector3d(map_x, map_y, map_z);
+        T_map.linear() = Eigen::AngleAxisd(map_yaw, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+        pcl::transformPointCloud(*raw, *raw, T_map.matrix());
 
         map_voxel_ = this->get_parameter("map_voxel").as_double();
         map_cloud_ = downsample(raw, map_voxel_);

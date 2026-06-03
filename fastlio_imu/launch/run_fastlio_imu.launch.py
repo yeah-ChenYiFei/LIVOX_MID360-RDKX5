@@ -23,6 +23,10 @@ def generate_launch_description():
         'enable_pgo', default_value='false',
         description='Enable SC-PGO loop closure (default: false for stationary use)'
     )
+    map_yaw_arg = DeclareLaunchArgument(
+        'map_yaw', default_value='0.0925',
+        description='Map yaw offset in radians CCW (5.3deg for current setup)'
+    )
 
     # 1. 启动 Livox 驱动 (msg_MID360_launch.py)
     # livox_launch = IncludeLaunchDescription(
@@ -62,11 +66,13 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'map_file': LaunchConfiguration('map_file'),
+            'map_yaw': LaunchConfiguration('map_yaw'),
         }]
     )
 
     return LaunchDescription([
         map_file_arg,
+        map_yaw_arg,
         enable_pgo_arg,
         # livox_launch,
         fastlio_launch,
