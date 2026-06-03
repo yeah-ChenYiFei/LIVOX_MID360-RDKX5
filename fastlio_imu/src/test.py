@@ -12,10 +12,22 @@ MAX_PW_US = 2500   # 180度
 
 def pwm_init(chip, channel):
     base = f"/sys/class/pwm/pwmchip{chip}/pwm{channel}"
-    if not os.path.exists(base):
-        with open(f"/sys/class/pwm/pwmchip{chip}/export", "w") as f:
-            f.write(str(channel))
-        time.sleep(0.5)
+    # 强制重新初始化：先关再 export，避免 disable 后无法重新写入
+    try:
+        with open(base + "/enable", "w") as f:
+            f.write("0")
+    except (PermissionError, FileNotFoundError, OSError):
+        pass
+    if os.path.exists(base):
+        try:
+            with open(f"/sys/class/pwm/pwmchip{chip}/unexport", "w") as f:
+                f.write(str(channel))
+            time.sleep(0.3)
+        except (PermissionError, FileNotFoundError, OSError):
+            pass
+    with open(f"/sys/class/pwm/pwmchip{chip}/export", "w") as f:
+        f.write(str(channel))
+    time.sleep(0.5)
     with open(base + "/period", "w") as f:
         f.write(str(PERIOD_NS))
     with open(base + "/duty_cycle", "w") as f:

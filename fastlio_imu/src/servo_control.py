@@ -28,10 +28,22 @@ def init():
     global _initialized, _current_stage
     base = _base()
     try:
-        if not os.path.exists(base):
-            with open(f"/sys/class/pwm/pwmchip{PWM_CHIP}/export", "w") as f:
-                f.write(str(PWM_CHANNEL))
-            time.sleep(0.5)
+        # 强制重新初始化：先关再 export，避免 disable 后无法重新写入
+        try:
+            with open(base + "/enable", "w") as f:
+                f.write("0")
+        except (PermissionError, FileNotFoundError, OSError):
+            pass
+        if os.path.exists(base):
+            try:
+                with open(f"/sys/class/pwm/pwmchip{PWM_CHIP}/unexport", "w") as f:
+                    f.write(str(PWM_CHANNEL))
+                time.sleep(0.3)
+            except (PermissionError, FileNotFoundError, OSError):
+                pass
+        with open(f"/sys/class/pwm/pwmchip{PWM_CHIP}/export", "w") as f:
+            f.write(str(PWM_CHANNEL))
+        time.sleep(0.5)
         with open(base + "/period", "w") as f:
             f.write(str(PERIOD_NS))
         with open(base + "/enable", "w") as f:
