@@ -23,6 +23,10 @@ def generate_launch_description():
         'enable_pgo', default_value='false',
         description='Enable SC-PGO loop closure (default: false for stationary use)'
     )
+    enable_icp_arg = DeclareLaunchArgument(
+        'enable_icp', default_value='true',
+        description='Enable ICP map localization (default: true, set false to run pure FAST-LIO)'
+    )
     map_yaw_arg = DeclareLaunchArgument(
         'map_yaw', default_value='0.0925',
         description='Map yaw offset in radians CCW (5.3deg for current setup)'
@@ -67,13 +71,15 @@ def generate_launch_description():
         parameters=[{
             'map_file': LaunchConfiguration('map_file'),
             'map_yaw': LaunchConfiguration('map_yaw'),
-        }]
+        }],
+        condition=IfCondition(LaunchConfiguration('enable_icp'))
     )
 
     return LaunchDescription([
         map_file_arg,
         map_yaw_arg,
         enable_pgo_arg,
+        enable_icp_arg,
         # livox_launch,
         fastlio_launch,
         forward_node,
