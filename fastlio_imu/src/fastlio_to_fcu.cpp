@@ -42,7 +42,7 @@ public:
         ring_world_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("/fcu/ring_world", 10);
 
         RCLCPP_INFO(this->get_logger(),
-            "OdomToFCU: /Odometry + /Odometry_scpgo + /lidox/ring_center → ring_world");
+            "OdomToFCU: ICP-corrected /Odometry at 10Hz + ring_world → /fcu/state");
     }
 
 private:
@@ -111,28 +111,50 @@ private:
             corr.translation().x(), corr.translation().y(), corr.translation().z());
     }
 
-    // Localized odometry callback (ICP-corrected, primary source)
+    // ICP callback: compute correction from latest raw odom, apply to all future raw frames
     void localized_callback(const nav_msgs::msg::Odometry::SharedPtr msg) {
-        last_localized_time_ = this->now().seconds();
-        processAndPublish(msg, false);  // no PGO correction needed
+        nav_msgs::msg::Odometry raw;
+        {
+            std::lock_guard<std::mutex> lock(raw_mutex_);
+            if (!has_raw_odom_) return;
+            raw = raw_odom_;
+        }
+
+        Eigen::Isometry3d T_icp = odomToIsometry(*msg);
+        Eigen::Isometry3d T_raw = odomToIsometry(raw);
+        Eigen::Isometry3d T_corr = T_icp * T_raw.inverse();
+
+        static constexpr double ALPHA = 0.5;
+        if (!has_icp_correction_) {
+            T_icp_correction_ = T_corr;
+            has_icp_correction_ = true;
+        } else {
+            T_icp_correction_.translation() = ALPHA * T_corr.translation() + (1.0 - ALPHA) * T_icp_correction_.translation();
+            Eigen::Quaterniond q_corr(T_corr.rotation());
+            Eigen::Quaterniond q_smooth(T_icp_correction_.rotation());
+            T_icp_correction_.linear() = q_smooth.slerp(ALPHA, q_corr).toRotationMatrix();
+        }
+
+        RCLCPP_INFO(this->get_logger(),
+            "ICP corr: dp=(%.3f,%.3f,%.3f) dr=%.2f deg",
+            T_corr.translation().x(), T_corr.translation().y(), T_corr.translation().z(),
+            Eigen::AngleAxisd(T_corr.rotation()).angle() * 180.0 / M_PI);
     }
 
-    // Raw odometry callback: fallback when localized is stale, with PGO correction
+    // Raw odometry callback: apply ICP correction at 10Hz for drift-free output
     void odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg) {
-        // Always store raw for PGO correction computation
+        // Always store raw for correction computation
         {
             std::lock_guard<std::mutex> lock(raw_mutex_);
             raw_odom_ = *msg;
             has_raw_odom_ = true;
         }
 
-        // If localized odometry is fresh, skip raw processing
-        double now = this->now().seconds();
-        if (now - last_localized_time_ < 1.0) return;
-
-        // Apply PGO correction if available
+        // Apply ICP correction (primary), fall back to PGO correction if available
         nav_msgs::msg::Odometry corrected;
-        {
+        if (has_icp_correction_) {
+            corrected = applyCorrection(*msg, T_icp_correction_);
+        } else {
             std::lock_guard<std::mutex> lock(corr_mutex_);
             corrected = has_correction_ ? applyCorrection(*msg, T_correction_) : *msg;
         }
@@ -140,8 +162,6 @@ private:
     }
 
     void processAndPublish(const nav_msgs::msg::Odometry::SharedPtr msg, bool /*from_raw*/) {
-        // msg is already corrected by caller (localized_callback passes ICP-corrected;
-        // odom_callback passes PGO-corrected). No further correction applied here.
         nav_msgs::msg::Odometry corrected = *msg;
 
         // --- compute speed (used by both watchdogs) ---
@@ -378,8 +398,9 @@ private:
     bool has_correction_ = false;
     std::mutex corr_mutex_;
 
-    // Localized odometry timeout
-    double last_localized_time_ = 0.0;
+    // ICP correction (computed by localized_callback, applied by odom_callback at 10Hz)
+    Eigen::Isometry3d T_icp_correction_ = Eigen::Isometry3d::Identity();
+    bool has_icp_correction_ = false;
 
     // Position jump watchdog
     bool has_valid_pose_ = false;
