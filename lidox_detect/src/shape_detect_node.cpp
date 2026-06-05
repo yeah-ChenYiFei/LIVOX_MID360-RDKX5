@@ -73,8 +73,9 @@ public:
         ring_fit_tol_    = declare("ring_fit_tolerance",     0.05);
         ring_inner_r_    = declare("ring_inner_radius",      0.40);
         ring_outer_r_    = declare("ring_outer_radius",      0.70);
-        ring_inlier_min_ = declare("ring_inlier_ratio_min",  0.55);
-        ring_max_pts_    = declare("ring_max_points",        800);
+        ring_inlier_min_  = declare("ring_inlier_ratio_min",  0.55);
+        ring_hollow_max_  = declare("ring_hollow_ratio_max",  0.15);
+        ring_max_pts_     = declare("ring_max_points",        800);
 
         // ── pillar: PCA ──────────────────────────────────
         pillar_l2l1_max_ = declare("pillar_l2_l1_max",      0.35);
@@ -348,6 +349,23 @@ private:
             return false;
         }
 
+        // ── hollowness check: true ring = empty center ──
+        float inner_r = ring_inner_r_ * 0.85f;
+        float inner_sq = inner_r * inner_r;
+        int inside_cnt = 0;
+        for (const auto &p : cluster->points) {
+            float dx = p.x - best_center.x();
+            float dz = p.z - best_center.z();
+            if (dx * dx + dz * dz < inner_sq) inside_cnt++;
+        }
+        float hollow_ratio = static_cast<float>(inside_cnt) / n;
+        if (hollow_ratio > ring_hollow_max_) {
+            RCLCPP_DEBUG(get_logger(),
+                "RING reject hollow: n=%d inside=%d ratio=%.3f > max=%.2f",
+                n, inside_cnt, hollow_ratio, ring_hollow_max_);
+            return false;
+        }
+
         center = best_center;
         radius = best_r;
         return true;
@@ -528,7 +546,7 @@ private:
     int    min_cluster_ring_, min_cluster_pillar_, max_cluster_;
 
     // ring
-    double ring_fit_tol_, ring_inner_r_, ring_outer_r_, ring_inlier_min_;
+    double ring_fit_tol_, ring_inner_r_, ring_outer_r_, ring_inlier_min_, ring_hollow_max_;
     int ring_max_pts_;
 
     // pillar
