@@ -567,8 +567,8 @@ private:
     // temporal consistency
     std::vector<TrackedRing> tracked_;
     float temporal_tol_ = 0.30f;
-    int confirm_frames_ = 1;
-    int stale_frames_ = 3;
+    int confirm_frames_ = 3;
+    int stale_frames_ = 5;
 };
 
 
