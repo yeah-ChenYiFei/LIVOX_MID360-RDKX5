@@ -82,7 +82,7 @@ public:
         pillar_l1l3_min_ = declare("pillar_l1_l3_min",      8.0);
 
         // ── multi-frame accumulation ────────────────────
-        accumulate_window_ = declare("accumulate_window",   0.4);
+        accumulate_window_ = declare("accumulate_window",   0.8);
         accumulate_voxel_  = declare("accumulate_voxel",    0.03);
 
         // ── RANSAC (after fusion, before clustering) ────
@@ -499,7 +499,7 @@ private:
                 if (d < best_dist) { best_dist = d; best_idx = i; }
             }
             if (best_idx >= 0) {
-                tr.center = tr.center * 0.4f + centers[best_idx] * 0.6f;
+                tr.center = tr.center * 0.7f + centers[best_idx] * 0.3f;
                 tr.hits++;
                 tr.misses = 0;
                 used[best_idx] = true;
