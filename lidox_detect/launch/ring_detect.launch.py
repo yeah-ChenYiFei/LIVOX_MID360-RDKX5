@@ -8,9 +8,9 @@ def generate_launch_description():
         name='cloud_filter_node',
         output='screen',
         parameters=[{
-            'x_min': -1.5, 'x_max': 1.5,
-            'y_min': -3.0, 'y_max': 3.0,
-            'z_min': -1.5, 'z_max': 1.5,
+            'x_min': -1.3, 'x_max': 1.3,
+            'y_min': -2.2, 'y_max': 0.0,
+            'z_min': -0.5, 'z_max': 1.4,
             'voxel_leaf': 0.03,
             'sor_enabled': True,
             'sor_mean_k': 20,

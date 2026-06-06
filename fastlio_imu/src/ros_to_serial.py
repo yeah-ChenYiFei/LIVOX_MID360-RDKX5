@@ -126,24 +126,24 @@ class RosToSerialNode(Node):
                     if buf[0] == CMD_HEAD and buf[2] == CMD_TAIL:
                         cmd = buf[1]
                         if cmd == CMD_OPEN:
-                        self.get_logger().info("[FCU] 投放指令 AA 01 FF")
-                        has_more = servo.next_stage()
-                        if has_more:
-                            self.get_logger().info(
-                                f"[servo] 等待下次指令 (当前 {servo.current_angle()}deg)")
+                            self.get_logger().info("[FCU] 投放指令 AA 01 FF")
+                            has_more = servo.next_stage()
+                            if has_more:
+                                self.get_logger().info(
+                                    f"[servo] 等待下次指令 (当前 {servo.current_angle()}deg)")
+                            else:
+                                self.get_logger().info(
+                                    f"[servo] 已到最终阶段 {servo.current_angle()}deg")
+                        elif cmd == CMD_START:
+                            self._collecting = True
+                            self._ring_buf.clear()
+                            self.get_logger().info("[ring] AA 02 FF → 开始采集")
+                        elif cmd == CMD_STOP:
+                            self._collecting = False
+                            self._handle_stop_collect()
                         else:
-                            self.get_logger().info(
-                                f"[servo] 已到最终阶段 {servo.current_angle()}deg")
-                    elif cmd == CMD_START:
-                        self._collecting = True
-                        self._ring_buf.clear()
-                        self.get_logger().info("[ring] AA 02 FF → 开始采集")
-                    elif cmd == CMD_STOP:
-                        self._collecting = False
-                        self._handle_stop_collect()
-                    else:
-                        self.get_logger().warn(f"[FCU] 未知指令: AA {cmd:02X} FF")
-                    buf.clear()
+                            self.get_logger().warn(f"[FCU] 未知指令: AA {cmd:02X} FF")
+                        buf.clear()
                     else:
                         buf.pop(0)
             except Exception as e:
