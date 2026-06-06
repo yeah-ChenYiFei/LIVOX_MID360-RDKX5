@@ -22,6 +22,7 @@ import random
 import threading
 import sys
 import os
+import statistics
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import servo_control as servo
@@ -36,12 +37,18 @@ POS_FLAG   = b"\x50"    # 'P'
 VEL_FLAG   = b"\x54"    # 'T'
 SPOT_FLAG  = b"\x53"    # 'S'
 
-CMD_HEAD = 0xAA
-CMD_OPEN = 0x01          # FCU -> servo advance
-CMD_TAIL = 0xFF
+CMD_HEAD  = 0xAA
+CMD_OPEN   = 0x01          # FCU -> servo advance
+CMD_START  = 0x02          # FCU -> start ring collection
+CMD_STOP   = 0x03          # FCU -> stop ring collection, trimmed mean, lock
+CMD_TAIL   = 0xFF
 
 SEND_RING  = True        # True = include ring data in serial frame
 TEST_RING  = False       # True = random ring coords (only when SEND_RING=True)
+
+# ── ring collection parameters ──
+COLLECT_MIN_SAMPLES  = 30      # minimum samples before stop
+COLLECT_TRIM_RATIO   = 0.20    # ±20% around median
 # =========================================================
 
 
@@ -74,6 +81,11 @@ class RosToSerialNode(Node):
         self._send_running = True
 
         self._recv_running = True
+
+        # --- ring collection state machine ---
+        self._collecting = False          # AA 02 start, AA 03 stop
+        self._locked_ring = None          # (x, y, z) locked world position
+        self._ring_buf = []               # list of (x, y, z)
 
         # --- servo ---
         servo.init()
@@ -114,17 +126,24 @@ class RosToSerialNode(Node):
                     if buf[0] == CMD_HEAD and buf[2] == CMD_TAIL:
                         cmd = buf[1]
                         if cmd == CMD_OPEN:
-                            self.get_logger().debug("[FCU] 收到投放指令 AA 01 FF")
-                            has_more = servo.next_stage()
-                            if has_more:
-                                self.get_logger().debug(
-                                    f"[servo] 等待下次指令 (当前 {servo.current_angle()}deg)")
-                            else:
-                                self.get_logger().debug(
-                                    f"[servo] 已到最终阶段 {servo.current_angle()}deg")
+                        self.get_logger().info("[FCU] 投放指令 AA 01 FF")
+                        has_more = servo.next_stage()
+                        if has_more:
+                            self.get_logger().info(
+                                f"[servo] 等待下次指令 (当前 {servo.current_angle()}deg)")
                         else:
-                            self.get_logger().warn(f"[FCU] 未知指令: AA {cmd:02X} FF")
-                        buf.clear()
+                            self.get_logger().info(
+                                f"[servo] 已到最终阶段 {servo.current_angle()}deg")
+                    elif cmd == CMD_START:
+                        self._collecting = True
+                        self._ring_buf.clear()
+                        self.get_logger().info("[ring] AA 02 FF → 开始采集")
+                    elif cmd == CMD_STOP:
+                        self._collecting = False
+                        self._handle_stop_collect()
+                    else:
+                        self.get_logger().warn(f"[FCU] 未知指令: AA {cmd:02X} FF")
+                    buf.clear()
                     else:
                         buf.pop(0)
             except Exception as e:
@@ -159,9 +178,19 @@ class RosToSerialNode(Node):
             # ring / spot data (world frame, origin = takeoff point)
             if SEND_RING:
                 if not TEST_RING:
-                    rx = msg.ring_world.position.x
-                    ry = msg.ring_world.position.y
-                    rz = msg.ring_world.position.z
+                    # collect during AA 02→AA 03 window
+                    if self._collecting:
+                        self._ring_buf.append((
+                            msg.ring_world.position.x,
+                            msg.ring_world.position.y,
+                            msg.ring_world.position.z))
+                    # use locked position if validated
+                    if self._locked_ring is not None:
+                        rx, ry, rz = self._locked_ring
+                    else:
+                        rx = msg.ring_world.position.x
+                        ry = msg.ring_world.position.y
+                        rz = msg.ring_world.position.z
                 elif TEST_RING:
                     rx = random.uniform(-15.0, 15.0)
                     ry = random.uniform(-15.0, 15.0)
@@ -200,6 +229,35 @@ class RosToSerialNode(Node):
                     self.ser.write(frame)
                 except Exception as e:
                     self.get_logger().error(f"串口发送失败: {e}")
+
+    # ── ring collection: median ±20% trimmed mean ──
+    def _handle_stop_collect(self):
+        n = len(self._ring_buf)
+        self.get_logger().info(f"[ring] AA 03 FF → 停止采集，n={n}")
+        if n < COLLECT_MIN_SAMPLES:
+            self.get_logger().warn(f"[ring] 样本不足: {n} < {COLLECT_MIN_SAMPLES}")
+            return
+
+        def trimmed_mean_axis(vals):
+            vals.sort()
+            med = vals[n // 2]
+            delta = abs(med) * COLLECT_TRIM_RATIO + 0.01
+            keep = [v for v in vals if abs(v - med) <= delta]
+            return sum(keep) / len(keep) if keep else med
+
+        xs = [p[0] for p in self._ring_buf]
+        ys = [p[1] for p in self._ring_buf]
+        zs = [p[2] for p in self._ring_buf]
+
+        avg = (trimmed_mean_axis(xs), trimmed_mean_axis(ys), trimmed_mean_axis(zs))
+        std = (statistics.pstdev(xs), statistics.pstdev(ys), statistics.pstdev(zs))
+
+        self.get_logger().info(
+            f"[ring] 结果: avg=({avg[0]:.3f},{avg[1]:.3f},{avg[2]:.3f}) "
+            f"std=({std[0]:.3f},{std[1]:.3f},{std[2]:.3f})")
+
+        self._locked_ring = avg
+        self.get_logger().info(f"[ring] 锁定坐标: ({avg[0]:.3f},{avg[1]:.3f},{avg[2]:.3f})，持续输出")
 
     def close_serial(self):
         self._send_running = False
