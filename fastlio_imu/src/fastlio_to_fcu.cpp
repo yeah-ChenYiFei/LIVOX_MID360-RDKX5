@@ -41,6 +41,14 @@ public:
         fcu_state_pub_ = this->create_publisher<fastlio_imu::msg::FcuState>("/fcu/state", 10);
         ring_world_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("/fcu/ring_world", 10);
 
+        // ── world-frame ring bounds (using corrected odometry) ──
+        wf_enabled_  = this->declare_parameter("world_filter_enabled", true);
+        wf_x_min_    = this->declare_parameter("world_x_min", 5.1);
+        wf_x_max_    = this->declare_parameter("world_x_max", 6.9);
+        wf_y_max_    = this->declare_parameter("world_y_max", 0.0);
+        wf_z_min_    = this->declare_parameter("world_z_min", 1.15);
+        wf_z_max_    = this->declare_parameter("world_z_max", 2.0);
+
         RCLCPP_INFO(this->get_logger(),
             "OdomToFCU: ICP-corrected /Odometry at 10Hz + ring_world → /fcu/state");
     }
@@ -288,9 +296,22 @@ private:
             ring_bl.pose.position.z);
         Eigen::Vector3d ring_world_vec = T_odom * ring_bl_vec;
 
+        // World-frame bounds check (uses corrected odometry, unlike shape_detect)
+        bool in_world_bounds = true;
+        if (wf_enabled_) {
+            if (ring_world_vec.x() < wf_x_min_ || ring_world_vec.x() > wf_x_max_)
+                in_world_bounds = false;
+            else if (ring_world_vec.y() > wf_y_max_)
+                in_world_bounds = false;
+            else if (ring_world_vec.z() < wf_z_min_ || ring_world_vec.z() > wf_z_max_)
+                in_world_bounds = false;
+        }
+
+        bool use_detection = detection_fresh && in_world_bounds;
+
         double dist_to_ring = ring_bl_vec.norm();
 
-        if (!ring_locked_ && detection_fresh && dist_to_ring < LOCK_DISTANCE) {
+        if (!ring_locked_ && use_detection && dist_to_ring < LOCK_DISTANCE) {
             ring_locked_ = true;
             ring_lock_pos_ = ring_world_vec;
             RCLCPP_INFO(this->get_logger(),
@@ -309,11 +330,11 @@ private:
         if (ring_locked_) {
             // Hold locked position (with EMA for tiny refinements)
             ring_ema_ = ring_lock_pos_ * EMA_ALPHA + ring_ema_ * (1.0 - EMA_ALPHA);
-        } else if (detection_fresh) {
+        } else if (use_detection) {
             // Normal EMA filtering
             ring_ema_ = ring_world_vec * EMA_ALPHA + ring_ema_ * (1.0 - EMA_ALPHA);
         }
-        // else: keep last EMA value (detection lost, not locked)
+        // else: keep last EMA value (detection lost or out of world bounds)
 
         ring_world_out.position.x = ring_ema_.x();
         ring_world_out.position.y = ring_ema_.y();
@@ -420,6 +441,10 @@ private:
     Eigen::Vector3d ring_ema_ = Eigen::Vector3d::Zero();
     bool ring_locked_ = false;
     Eigen::Vector3d ring_lock_pos_ = Eigen::Vector3d::Zero();
+
+    // World-frame ring bounds (applied with corrected odometry)
+    bool wf_enabled_;
+    double wf_x_min_, wf_x_max_, wf_y_max_, wf_z_min_, wf_z_max_;
 };
 
 int main(int argc, char **argv) {

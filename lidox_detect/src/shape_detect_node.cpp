@@ -77,14 +77,6 @@ public:
         ring_hollow_max_  = declare("ring_hollow_ratio_max",  0.15);
         ring_max_pts_     = declare("ring_max_points",        800);
 
-        // ── world-frame bounds ──
-        world_filter_en_ = declare("world_filter_enabled",  true);
-        world_x_min_     = declare("world_x_min",            5.1);
-        world_x_max_     = declare("world_x_max",            6.9);
-        world_y_max_     = declare("world_y_max",            0.0);
-        world_z_min_     = declare("world_z_min",            1.15);
-        world_z_max_     = declare("world_z_max",            2.0);
-
         // ── pillar: PCA ──────────────────────────────────
         pillar_l2l1_max_ = declare("pillar_l2_l1_max",      0.35);
         pillar_l1l3_min_ = declare("pillar_l1_l3_min",      8.0);
@@ -535,20 +527,6 @@ private:
         }
         if (!best) return;
 
-        // World-frame bounds filter
-        if (world_filter_en_) {
-            Eigen::Isometry3d T_wb;
-            {
-                std::lock_guard<std::mutex> lock(pose_mutex_);
-                if (!has_pose_) { publish_ring(best->center); return; }
-                T_wb = latest_pose_;
-            }
-            Eigen::Vector3d c_w = T_wb * best->center.cast<double>();
-            if (c_w.x() < world_x_min_ || c_w.x() > world_x_max_) return;
-            if (c_w.y() > world_y_max_) return;
-            if (c_w.z() < world_z_min_ || c_w.z() > world_z_max_) return;
-        }
-
         RCLCPP_INFO(get_logger(),
             "PUBLISH ring: center=(%.2f,%.2f,%.2f) hits=%d",
             best->center.x(), best->center.y(), best->center.z(), best->hits);
@@ -585,10 +563,6 @@ private:
     // RANSAC (after fusion)
     bool ground_removal_en_, wall_removal_en_;
     double ransac_dist_, ransac_ground_nz_, ransac_wall_ratio_;
-
-    // world-frame filter
-    bool world_filter_en_;
-    double world_x_min_, world_x_max_, world_y_max_, world_z_min_, world_z_max_;
 
     // temporal consistency
     std::vector<TrackedRing> tracked_;

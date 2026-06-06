@@ -43,11 +43,6 @@ def generate_launch_description():
             'ransac_dist_thresh': 0.03,
             'ransac_ground_nz_min': 0.7,
             'ransac_wall_min_ratio': 0.30,
-            # world-frame bounds
-            'world_filter_enabled': True,
-            'world_x_min': 5.1,  'world_x_max': 6.9,
-            'world_y_max': 0.0,
-            'world_z_min': 1.15, 'world_z_max': 2.0,
         }]
     )
 
