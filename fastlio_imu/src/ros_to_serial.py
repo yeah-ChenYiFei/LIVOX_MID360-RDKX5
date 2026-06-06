@@ -47,7 +47,7 @@ SEND_RING  = True        # True = include ring data in serial frame
 TEST_RING  = False       # True = random ring coords (only when SEND_RING=True)
 
 # ── ring collection parameters ──
-COLLECT_MIN_SAMPLES  = 30      # minimum samples before stop
+COLLECT_MIN_SAMPLES  = 10      # minimum samples before stop (~5s at 2-3Hz)
 COLLECT_TRIM_RATIO   = 0.20    # ±20% around median
 # =========================================================
 
