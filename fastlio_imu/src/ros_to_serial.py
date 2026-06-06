@@ -49,6 +49,13 @@ TEST_RING  = False       # True = random ring coords (only when SEND_RING=True)
 # ── ring collection parameters ──
 COLLECT_MIN_SAMPLES  = 10      # minimum samples before stop (~5s at 2-3Hz)
 COLLECT_TRIM_RATIO   = 0.20    # ±20% around median
+
+# ── world-frame bounds for ring collection (must match fastlio_to_fcu) ──
+RING_WORLD_X_MIN = 5.1
+RING_WORLD_X_MAX = 6.9
+RING_WORLD_Y_MAX = 0.0
+RING_WORLD_Z_MIN = 1.15
+RING_WORLD_Z_MAX = 2.0
 # =========================================================
 
 
@@ -178,12 +185,18 @@ class RosToSerialNode(Node):
             # ring / spot data (world frame, origin = takeoff point)
             if SEND_RING:
                 if not TEST_RING:
-                    # collect during AA 02→AA 03 window
+                    # collect during AA 02→AA 03 window (world bounds gate)
                     if self._collecting:
-                        self._ring_buf.append((
-                            msg.ring_world.position.x,
-                            msg.ring_world.position.y,
-                            msg.ring_world.position.z))
+                        rx = msg.ring_world.position.x
+                        ry = msg.ring_world.position.y
+                        rz = msg.ring_world.position.z
+                        if (RING_WORLD_X_MIN <= rx <= RING_WORLD_X_MAX
+                            and ry <= RING_WORLD_Y_MAX
+                            and RING_WORLD_Z_MIN <= rz <= RING_WORLD_Z_MAX):
+                            self._ring_buf.append((rx, ry, rz))
+                        else:
+                            self.get_logger().debug(
+                                f"[ring] 采集跳过: ({rx:.2f},{ry:.2f},{rz:.2f}) 超出世界范围")
                     # use locked position if validated
                     if self._locked_ring is not None:
                         rx, ry, rz = self._locked_ring
