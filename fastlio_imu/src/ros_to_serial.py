@@ -185,18 +185,18 @@ class RosToSerialNode(Node):
             # ring / spot data (world frame, origin = takeoff point)
             if SEND_RING:
                 if not TEST_RING:
-                    # collect during AA 02→AA 03 window (world bounds gate)
+                    # collect during AA 02→AA 03 window (skip not-yet-detected)
                     if self._collecting:
                         rx = msg.ring_world.position.x
                         ry = msg.ring_world.position.y
                         rz = msg.ring_world.position.z
-                        if (RING_WORLD_X_MIN <= rx <= RING_WORLD_X_MAX
-                            and ry <= RING_WORLD_Y_MAX
-                            and RING_WORLD_Z_MIN <= rz <= RING_WORLD_Z_MAX):
+                        # Only collect once ring_world is meaningful (non-zero).
+                        # World bounds are already enforced by fastlio_to_fcu.
+                        if rx * rx + ry * ry + rz * rz > 1.0:
                             self._ring_buf.append((rx, ry, rz))
                         else:
-                            self.get_logger().debug(
-                                f"[ring] 采集跳过: ({rx:.2f},{ry:.2f},{rz:.2f}) 超出世界范围")
+                            self.get_logger().info(
+                                f"[ring] 采集跳过: ({rx:.2f},{ry:.2f},{rz:.2f}) 未检测到环")
                     # use locked position if validated
                     if self._locked_ring is not None:
                         rx, ry, rz = self._locked_ring
@@ -247,8 +247,8 @@ class RosToSerialNode(Node):
     def _handle_stop_collect(self):
         n = len(self._ring_buf)
         self.get_logger().info(f"[ring] AA 03 FF → 停止采集，n={n}")
-        if n < COLLECT_MIN_SAMPLES:
-            self.get_logger().warn(f"[ring] 样本不足: {n} < {COLLECT_MIN_SAMPLES}")
+        if n == 0:
+            self.get_logger().warn("[ring] buf为空，锁定失败，继续用实时值")
             return
 
         def trimmed_mean_axis(vals):
@@ -262,8 +262,17 @@ class RosToSerialNode(Node):
         ys = [p[1] for p in self._ring_buf]
         zs = [p[2] for p in self._ring_buf]
 
-        avg = (trimmed_mean_axis(xs), trimmed_mean_axis(ys), trimmed_mean_axis(zs))
-        std = (statistics.pstdev(xs), statistics.pstdev(ys), statistics.pstdev(zs))
+        if n >= COLLECT_MIN_SAMPLES:
+            avg = (trimmed_mean_axis(xs), trimmed_mean_axis(ys), trimmed_mean_axis(zs))
+        else:
+            avg = (sum(xs)/n, sum(ys)/n, sum(zs)/n)
+            self.get_logger().warn(
+                f"[ring] 样本不足 {n}<{COLLECT_MIN_SAMPLES}，用均值代替trimmed mean")
+
+        try:
+            std = (statistics.pstdev(xs), statistics.pstdev(ys), statistics.pstdev(zs))
+        except Exception:
+            std = (0.0, 0.0, 0.0)
 
         self.get_logger().info(
             f"[ring] 结果: avg=({avg[0]:.3f},{avg[1]:.3f},{avg[2]:.3f}) "
