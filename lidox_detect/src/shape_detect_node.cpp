@@ -77,6 +77,16 @@ public:
         ring_hollow_max_  = declare("ring_hollow_ratio_max",  0.15);
         ring_max_pts_     = declare("ring_max_points",        800);
 
+        // ── world-frame bounds + trimmed-mean smoothing ──
+        world_filter_en_ = declare("world_filter_enabled",  true);
+        world_x_min_     = declare("world_x_min",            6.9);
+        world_x_max_     = declare("world_x_max",            8.1);
+        world_y_max_     = declare("world_y_max",            0.0);   // Y < 0
+        world_z_min_     = declare("world_z_min",            1.15);
+        world_z_max_     = declare("world_z_max",            2.0);
+        trim_ratio_      = declare("trim_ratio",             0.20);  // ±20% around median
+        trim_buf_size_   = declare("trim_buf_size",          10);    // ring buffer size
+
         // ── pillar: PCA ──────────────────────────────────
         pillar_l2l1_max_ = declare("pillar_l2_l1_max",      0.35);
         pillar_l1l3_min_ = declare("pillar_l1_l3_min",      8.0);
@@ -525,12 +535,78 @@ private:
             if (tr.hits < confirm_frames_) continue;
             if (!best || tr.hits > best->hits) best = &tr;
         }
-        if (best) {
-            RCLCPP_INFO(get_logger(),
-                "PUBLISH ring: center=(%.2f,%.2f,%.2f) hits=%d",
-                best->center.x(), best->center.y(), best->center.z(), best->hits);
-            publish_ring(best->center);
+        if (!best) return;
+
+        // Transform to world frame
+        Eigen::Isometry3d T_wb;
+        {
+            std::lock_guard<std::mutex> lock(pose_mutex_);
+            if (!has_pose_) { publish_ring(best->center); return; }
+            T_wb = latest_pose_;
         }
+        Eigen::Vector3d c_bl = best->center.cast<double>();
+        Eigen::Vector3d c_w = T_wb * c_bl;
+
+        // World-frame bounds
+        if (world_filter_en_) {
+            if (c_w.x() < world_x_min_ || c_w.x() > world_x_max_) {
+                RCLCPP_DEBUG(get_logger(), "RING reject world X: %.2f", c_w.x());
+                return;
+            }
+            if (c_w.y() > world_y_max_) {  // Y must be negative
+                RCLCPP_DEBUG(get_logger(), "RING reject world Y: %.2f (must be <0)", c_w.y());
+                return;
+            }
+            if (c_w.z() < world_z_min_ || c_w.z() > world_z_max_) {
+                RCLCPP_DEBUG(get_logger(), "RING reject world Z: %.2f", c_w.z());
+                return;
+            }
+        }
+
+        // Add to world position buffer
+        ring_world_buf_.push_back(c_w);
+        if ((int)ring_world_buf_.size() > trim_buf_size_)
+            ring_world_buf_.pop_front();
+
+        // Median ±trim_ratio trimmed mean
+        Eigen::Vector3d c_smooth = trimmed_mean(ring_world_buf_, trim_ratio_);
+
+        // Transform back to base_link
+        Eigen::Vector3d c_bl_out = T_wb.inverse() * c_smooth;
+
+        RCLCPP_INFO(get_logger(),
+            "PUBLISH ring: raw=(%.2f,%.2f,%.2f) w_smooth=(%.2f,%.2f,%.2f) hits=%d buf=%zu",
+            best->center.x(), best->center.y(), best->center.z(),
+            c_smooth.x(), c_smooth.y(), c_smooth.z(), best->hits, ring_world_buf_.size());
+
+        publish_ring(Eigen::Vector3f(
+            (float)c_bl_out.x(), (float)c_bl_out.y(), (float)c_bl_out.z()));
+    }
+
+    // Median ±ratio trimmed mean along each axis
+    static Eigen::Vector3d trimmed_mean(std::deque<Eigen::Vector3d> &buf, double ratio) {
+        size_t n = buf.size();
+        if (n == 0) return Eigen::Vector3d::Zero();
+        if (n == 1) return buf.front();
+
+        Eigen::Vector3d result;
+        for (int ax = 0; ax < 3; ax++) {
+            std::vector<double> vals(n);
+            for (size_t i = 0; i < n; i++) vals[i] = buf[i](ax);
+            std::sort(vals.begin(), vals.end());
+            double med = vals[n / 2];
+            double delta = std::fabs(med) * ratio + 0.01;  // min 1cm floor
+            double sum = 0;
+            int cnt = 0;
+            for (size_t i = 0; i < n; i++) {
+                if (std::fabs(vals[i] - med) <= delta) {
+                    sum += vals[i];
+                    cnt++;
+                }
+            }
+            result(ax) = cnt > 0 ? sum / cnt : med;
+        }
+        return result;
     }
 
     // ── members ─────────────────────────────────────
@@ -563,6 +639,13 @@ private:
     // RANSAC (after fusion)
     bool ground_removal_en_, wall_removal_en_;
     double ransac_dist_, ransac_ground_nz_, ransac_wall_ratio_;
+
+    // world-frame filter + trimmed-mean buffer
+    bool world_filter_en_;
+    double world_x_min_, world_x_max_, world_y_max_, world_z_min_, world_z_max_;
+    double trim_ratio_;
+    int trim_buf_size_;
+    std::deque<Eigen::Vector3d> ring_world_buf_;
 
     // temporal consistency
     std::vector<TrackedRing> tracked_;
