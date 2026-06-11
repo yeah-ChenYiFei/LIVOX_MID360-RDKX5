@@ -202,6 +202,35 @@ private:
         vg.filter(*merged_ds);
         if (merged_ds->empty()) return;
 
+        // ── World-frame passthrough filter ──────────────
+        if (world_filter_enabled_) {
+            Eigen::Isometry3d T_w_b;
+            bool have_pose;
+            {
+                std::lock_guard<std::mutex> lock(pose_mutex_);
+                have_pose = has_pose_;
+                T_w_b = latest_pose_;
+            }
+
+            if (have_pose) {
+                PointCloudT::Ptr filtered(new PointCloudT);
+                filtered->reserve(merged_ds->size());
+
+                for (const auto &pt : merged_ds->points) {
+                    Eigen::Vector3d p_w = T_w_b * Eigen::Vector3d(pt.x, pt.y, pt.z);
+                    if (p_w.x() >= world_x_min_ && p_w.x() <= world_x_max_ &&
+                        p_w.y() >= world_y_min_ && p_w.y() <= world_y_max_ &&
+                        p_w.z() >= world_z_min_ && p_w.z() <= world_z_max_)
+                    {
+                        filtered->push_back(pt);
+                    }
+                }
+
+                merged_ds->swap(*filtered);
+                if (merged_ds->empty()) return;
+            }
+        }
+
         // publish merged cloud for RViz2 debugging
         sensor_msgs::msg::PointCloud2 merged_msg;
         pcl::toROSMsg(*merged_ds, merged_msg);
@@ -243,35 +272,6 @@ private:
     }
 
     void detect_and_publish(PointCloudT::Ptr &cloud, double now) {
-        // ── World-frame passthrough filter ──────────────
-        if (world_filter_enabled_) {
-            Eigen::Isometry3d T_w_b;
-            bool have_pose;
-            {
-                std::lock_guard<std::mutex> lock(pose_mutex_);
-                have_pose = has_pose_;
-                T_w_b = latest_pose_;
-            }
-
-            if (have_pose) {
-                PointCloudT::Ptr filtered(new PointCloudT);
-                filtered->reserve(cloud->size());
-
-                for (const auto &pt : cloud->points) {
-                    Eigen::Vector3d p_w = T_w_b * Eigen::Vector3d(pt.x, pt.y, pt.z);
-                    if (p_w.x() >= world_x_min_ && p_w.x() <= world_x_max_ &&
-                        p_w.y() >= world_y_min_ && p_w.y() <= world_y_max_ &&
-                        p_w.z() >= world_z_min_ && p_w.z() <= world_z_max_)
-                    {
-                        filtered->push_back(pt);
-                    }
-                }
-
-                cloud->swap(*filtered);
-                if (cloud->empty()) return;
-            }
-        }
-
         // ── RANSAC ground removal (after fusion — ring is dense enough to survive) ──
         if (ground_removal_en_ && cloud->size() > 50) {
             pcl::ModelCoefficients::Ptr coeff(new pcl::ModelCoefficients);
@@ -342,9 +342,15 @@ private:
             return;
         }
 
-        RCLCPP_INFO(get_logger(), "Clusters: %zu, sizes:", cluster_indices.size());
-        for (size_t i = 0; i < cluster_indices.size(); i++)
-            RCLCPP_INFO(get_logger(), "  [%zu] n=%zu", i, cluster_indices[i].indices.size());
+        {
+            std::string sizes;
+            for (size_t i = 0; i < cluster_indices.size(); i++) {
+                if (i > 0) sizes += " ";
+                sizes += std::to_string(cluster_indices[i].indices.size());
+            }
+            RCLCPP_INFO(get_logger(), "Clusters: %zu sizes=[%s] cloud_n=%zu",
+                        cluster_indices.size(), sizes.c_str(), cloud->size());
+        }
 
         std::vector<Eigen::Vector3f> frame_ring_centers;
 
@@ -384,11 +390,21 @@ private:
     bool is_ring(const PointCloudT::Ptr &cluster,
                  Eigen::Vector3f &center, float &radius) {
         int n = static_cast<int>(cluster->size());
-        if (n < min_cluster_ring_) return false;
-        if (n > ring_max_pts_) return false;
+        if (n < min_cluster_ring_) {
+            RCLCPP_INFO(get_logger(), "RING reject size: n=%d < min=%d", n, min_cluster_ring_);
+            return false;
+        }
+        if (n > ring_max_pts_) {
+            RCLCPP_INFO(get_logger(), "RING reject size: n=%d > max=%d", n, ring_max_pts_);
+            return false;
+        }
 
         Eigen::Vector3f ev = sorted_eigenvalues(cluster);
-        if (ev(2) / ev(0) > 0.20f) return false;
+        float pca_ratio = ev(2) / ev(0);
+        if (pca_ratio > 0.20f) {
+            RCLCPP_INFO(get_logger(), "RING reject PCA flat: n=%d ev2/ev0=%.3f > 0.20", n, pca_ratio);
+            return false;
+        }
 
         float best_ratio = 0;
         Eigen::Vector3f best_center(0, 0, 0);
@@ -398,8 +414,8 @@ private:
         try_plane(0, 2, 1, cluster, n, best_center, best_r, best_ratio);  // XZ
 
         if (best_ratio < ring_inlier_min_) {
-            RCLCPP_DEBUG(get_logger(),
-                "RING reject RANSAC ratio: n=%d best_r=%.3f best_ratio=%.3f < min=%.2f",
+            RCLCPP_INFO(get_logger(),
+                "RING reject RANSAC: n=%d best_r=%.3f ratio=%.3f < min=%.2f",
                 n, best_r, best_ratio, ring_inlier_min_);
             return false;
         }
@@ -415,7 +431,7 @@ private:
         }
         float hollow_ratio = static_cast<float>(inside_cnt) / n;
         if (hollow_ratio > ring_hollow_max_) {
-            RCLCPP_DEBUG(get_logger(),
+            RCLCPP_INFO(get_logger(),
                 "RING reject hollow: n=%d inside=%d ratio=%.3f > max=%.2f",
                 n, inside_cnt, hollow_ratio, ring_hollow_max_);
             return false;
