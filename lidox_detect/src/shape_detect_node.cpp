@@ -64,8 +64,8 @@ class ShapeDetectNode : public rclcpp::Node {
 public:
     ShapeDetectNode() : Node("shape_detect_node") {
         // ── cluster parameters ──────────────────────────
-        cluster_tol_         = declare("cluster_tolerance",        0.12);
-        min_cluster_ring_    = declare("min_cluster_size_ring",    60);
+        cluster_tol_         = declare("cluster_tolerance",        0.06);
+        min_cluster_ring_    = declare("min_cluster_size_ring",    40);
         min_cluster_pillar_  = declare("min_cluster_size_pillar",  80);
         max_cluster_         = declare("max_cluster_size",         8000);
 
@@ -98,8 +98,8 @@ public:
         world_x_max_ = declare("world_x_max", 6.9);
         world_y_min_ = declare("world_y_min", -2.7);
         world_y_max_ = declare("world_y_max", 0.0);
-        world_z_min_ = declare("world_z_min", 1.0);
-        world_z_max_ = declare("world_z_max", 2.4);
+        world_z_min_ = declare("world_z_min", 0.9);
+        world_z_max_ = declare("world_z_max", 2.5);
 
         // ── pub / sub ────────────────────────────────────
         cloud_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(

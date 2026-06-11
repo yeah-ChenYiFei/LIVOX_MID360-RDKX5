@@ -24,8 +24,8 @@ def generate_launch_description():
         name='shape_detect_node',
         output='screen',
         parameters=[{
-            'cluster_tolerance': 0.12,
-            'min_cluster_size_ring': 60,
+            'cluster_tolerance': 0.06,
+            'min_cluster_size_ring': 40,
             'min_cluster_size_pillar': 80,
             'max_cluster_size': 20000,
             'ring_fit_tolerance': 0.05,
@@ -47,7 +47,7 @@ def generate_launch_description():
             'world_filter_enabled': True,
             'world_x_min': 5.3, 'world_x_max': 6.9,
             'world_y_min': -2.7, 'world_y_max': 0.0,
-            'world_z_min': 1.0, 'world_z_max': 2.4,
+            'world_z_min': 0.9, 'world_z_max': 2.5,
         }]
     )
 
