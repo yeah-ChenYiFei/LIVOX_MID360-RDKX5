@@ -267,8 +267,6 @@ private:
     // ── ring_world transform with EMA filter + near-field lock ──
     void update_ring_world(const nav_msgs::msg::Odometry& odom,
                            geometry_msgs::msg::Pose& ring_world_out) {
-        static constexpr double LOCK_DISTANCE   = 0.8;   // lock when this close
-        static constexpr double UNLOCK_DISTANCE = 2.0;   // unlock when this far
         static constexpr double EMA_ALPHA       = 0.3;   // exponential moving average
         static constexpr double RING_TIMEOUT    = 1.0;   // seconds without detection
 
@@ -309,29 +307,7 @@ private:
 
         bool use_detection = detection_fresh && in_world_bounds;
 
-        double dist_to_ring = ring_bl_vec.norm();
-
-        if (!ring_locked_ && use_detection && dist_to_ring < LOCK_DISTANCE) {
-            ring_locked_ = true;
-            ring_lock_pos_ = ring_world_vec;
-            RCLCPP_INFO(this->get_logger(),
-                "Ring locked at world (%.2f,%.2f,%.2f) dist=%.2fm",
-                ring_lock_pos_.x(), ring_lock_pos_.y(), ring_lock_pos_.z(), dist_to_ring);
-        }
-
-        if (ring_locked_) {
-            double lock_drift = (ring_world_vec - ring_lock_pos_).norm();
-            if (lock_drift > UNLOCK_DISTANCE) {
-                ring_locked_ = false;
-                RCLCPP_INFO(this->get_logger(), "Ring unlocked (drift %.2fm)", lock_drift);
-            }
-        }
-
-        if (ring_locked_) {
-            // Hold locked position (with EMA for tiny refinements)
-            ring_ema_ = ring_lock_pos_ * EMA_ALPHA + ring_ema_ * (1.0 - EMA_ALPHA);
-        } else if (use_detection) {
-            // Normal EMA filtering
+        if (use_detection) {
             ring_ema_ = ring_world_vec * EMA_ALPHA + ring_ema_ * (1.0 - EMA_ALPHA);
         }
         // else: keep last EMA value (detection lost or out of world bounds)
@@ -439,8 +415,6 @@ private:
     std::mutex ring_mutex_;
 
     Eigen::Vector3d ring_ema_ = Eigen::Vector3d::Zero();
-    bool ring_locked_ = false;
-    Eigen::Vector3d ring_lock_pos_ = Eigen::Vector3d::Zero();
 
     // World-frame ring bounds (applied with corrected odometry)
     bool wf_enabled_;
