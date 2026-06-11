@@ -65,7 +65,7 @@ public:
     ShapeDetectNode() : Node("shape_detect_node") {
         // ── cluster parameters ──────────────────────────
         cluster_tol_         = declare("cluster_tolerance",        0.12);
-        min_cluster_ring_    = declare("min_cluster_size_ring",    80);
+        min_cluster_ring_    = declare("min_cluster_size_ring",    60);
         min_cluster_pillar_  = declare("min_cluster_size_pillar",  80);
         max_cluster_         = declare("max_cluster_size",         8000);
 

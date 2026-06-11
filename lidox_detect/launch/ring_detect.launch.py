@@ -25,7 +25,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'cluster_tolerance': 0.12,
-            'min_cluster_size_ring': 80,
+            'min_cluster_size_ring': 60,
             'min_cluster_size_pillar': 80,
             'max_cluster_size': 20000,
             'ring_fit_tolerance': 0.05,
