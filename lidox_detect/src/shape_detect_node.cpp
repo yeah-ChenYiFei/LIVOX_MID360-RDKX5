@@ -70,10 +70,10 @@ public:
         max_cluster_         = declare("max_cluster_size",         8000);
 
         // ── ring: RANSAC circle2D ────────────────────────
-        ring_fit_tol_    = declare("ring_fit_tolerance",     0.05);
+        ring_fit_tol_    = declare("ring_fit_tolerance",     0.10);
         ring_inner_r_    = declare("ring_inner_radius",      0.40);
         ring_outer_r_    = declare("ring_outer_radius",      0.70);
-        ring_inlier_min_  = declare("ring_inlier_ratio_min",  0.55);
+        ring_inlier_min_  = declare("ring_inlier_ratio_min",  0.35);
         ring_hollow_max_  = declare("ring_hollow_ratio_max",  0.15);
         ring_max_pts_     = declare("ring_max_points",        800);
 
@@ -647,7 +647,7 @@ private:
     // temporal consistency
     std::vector<TrackedRing> tracked_;
     float temporal_tol_ = 0.30f;
-    int confirm_frames_ = 3;
+    int confirm_frames_ = 2;
     int stale_frames_ = 5;
 };
 
