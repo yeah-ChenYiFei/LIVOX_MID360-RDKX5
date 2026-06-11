@@ -25,7 +25,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'cluster_tolerance': 0.12,
-            'min_cluster_size_ring': 40,
+            'min_cluster_size_ring': 200,
             'min_cluster_size_pillar': 80,
             'max_cluster_size': 20000,
             'ring_fit_tolerance': 0.05,
@@ -43,6 +43,11 @@ def generate_launch_description():
             'ransac_dist_thresh': 0.03,
             'ransac_ground_nz_min': 0.7,
             'ransac_wall_min_ratio': 0.30,
+            # ── World-frame passthrough filter ──
+            'world_filter_enabled': True,
+            'world_x_min': 5.3, 'world_x_max': 6.9,
+            'world_y_min': -2.7, 'world_y_max': 0.0,
+            'world_z_min': 1.0, 'world_z_max': 2.4,
         }]
     )
 

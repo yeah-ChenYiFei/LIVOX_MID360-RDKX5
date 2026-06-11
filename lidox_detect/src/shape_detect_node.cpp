@@ -65,7 +65,7 @@ public:
     ShapeDetectNode() : Node("shape_detect_node") {
         // ── cluster parameters ──────────────────────────
         cluster_tol_         = declare("cluster_tolerance",        0.12);
-        min_cluster_ring_    = declare("min_cluster_size_ring",    40);
+        min_cluster_ring_    = declare("min_cluster_size_ring",    200);
         min_cluster_pillar_  = declare("min_cluster_size_pillar",  80);
         max_cluster_         = declare("max_cluster_size",         8000);
 
@@ -92,6 +92,15 @@ public:
         ransac_ground_nz_  = declare("ransac_ground_nz_min",   0.7);
         ransac_wall_ratio_ = declare("ransac_wall_min_ratio",  0.30);
 
+        // ── world-frame passthrough filter ──────────────
+        world_filter_enabled_ = declare("world_filter_enabled", true);
+        world_x_min_ = declare("world_x_min", 5.3);
+        world_x_max_ = declare("world_x_max", 6.9);
+        world_y_min_ = declare("world_y_min", -2.7);
+        world_y_max_ = declare("world_y_max", 0.0);
+        world_z_min_ = declare("world_z_min", 1.0);
+        world_z_max_ = declare("world_z_max", 2.4);
+
         // ── pub / sub ────────────────────────────────────
         cloud_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
             "/lidox/filtered_cloud", rclcpp::SensorDataQoS(),
@@ -112,9 +121,17 @@ public:
         merged_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
             "/lidox/merged_cloud", 10);
 
-        RCLCPP_INFO(get_logger(),
-            "ShapeDetectNode: multi-frame acc window=%.1fs voxel=%.2f",
-            accumulate_window_, accumulate_voxel_);
+        if (world_filter_enabled_) {
+            RCLCPP_INFO(get_logger(),
+                "ShapeDetectNode: acc win=%.1fs vox=%.2f | world filter ON: X[%.1f,%.1f] Y[%.1f,%.1f] Z[%.1f,%.1f]",
+                accumulate_window_, accumulate_voxel_,
+                world_x_min_, world_x_max_, world_y_min_, world_y_max_,
+                world_z_min_, world_z_max_);
+        } else {
+            RCLCPP_INFO(get_logger(),
+                "ShapeDetectNode: acc win=%.1fs vox=%.2f | world filter OFF",
+                accumulate_window_, accumulate_voxel_);
+        }
     }
 
 private:
@@ -226,6 +243,35 @@ private:
     }
 
     void detect_and_publish(PointCloudT::Ptr &cloud, double now) {
+        // ── World-frame passthrough filter ──────────────
+        if (world_filter_enabled_) {
+            Eigen::Isometry3d T_w_b;
+            bool have_pose;
+            {
+                std::lock_guard<std::mutex> lock(pose_mutex_);
+                have_pose = has_pose_;
+                T_w_b = latest_pose_;
+            }
+
+            if (have_pose) {
+                PointCloudT::Ptr filtered(new PointCloudT);
+                filtered->reserve(cloud->size());
+
+                for (const auto &pt : cloud->points) {
+                    Eigen::Vector3d p_w = T_w_b * Eigen::Vector3d(pt.x, pt.y, pt.z);
+                    if (p_w.x() >= world_x_min_ && p_w.x() <= world_x_max_ &&
+                        p_w.y() >= world_y_min_ && p_w.y() <= world_y_max_ &&
+                        p_w.z() >= world_z_min_ && p_w.z() <= world_z_max_)
+                    {
+                        filtered->push_back(pt);
+                    }
+                }
+
+                cloud->swap(*filtered);
+                if (cloud->empty()) return;
+            }
+        }
+
         // ── RANSAC ground removal (after fusion — ring is dense enough to survive) ──
         if (ground_removal_en_ && cloud->size() > 50) {
             pcl::ModelCoefficients::Ptr coeff(new pcl::ModelCoefficients);
@@ -563,6 +609,12 @@ private:
     // RANSAC (after fusion)
     bool ground_removal_en_, wall_removal_en_;
     double ransac_dist_, ransac_ground_nz_, ransac_wall_ratio_;
+
+    // World-frame passthrough filter
+    bool   world_filter_enabled_;
+    double world_x_min_, world_x_max_;
+    double world_y_min_, world_y_max_;
+    double world_z_min_, world_z_max_;
 
     // temporal consistency
     std::vector<TrackedRing> tracked_;
