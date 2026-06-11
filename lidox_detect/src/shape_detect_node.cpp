@@ -65,7 +65,7 @@ public:
     ShapeDetectNode() : Node("shape_detect_node") {
         // ── cluster parameters ──────────────────────────
         cluster_tol_         = declare("cluster_tolerance",        0.12);
-        min_cluster_ring_    = declare("min_cluster_size_ring",    200);
+        min_cluster_ring_    = declare("min_cluster_size_ring",    80);
         min_cluster_pillar_  = declare("min_cluster_size_pillar",  80);
         max_cluster_         = declare("max_cluster_size",         8000);
 
@@ -337,6 +337,15 @@ private:
         ec.setInputCloud(cloud);
         ec.extract(cluster_indices);
 
+        if (cluster_indices.empty()) {
+            RCLCPP_INFO(get_logger(), "No clusters found (cloud size=%zu)", cloud->size());
+            return;
+        }
+
+        RCLCPP_INFO(get_logger(), "Clusters: %zu, sizes:", cluster_indices.size());
+        for (size_t i = 0; i < cluster_indices.size(); i++)
+            RCLCPP_INFO(get_logger(), "  [%zu] n=%zu", i, cluster_indices[i].indices.size());
+
         std::vector<Eigen::Vector3f> frame_ring_centers;
 
         for (auto &indices : cluster_indices) {
@@ -571,7 +580,10 @@ private:
             if (tr.hits < confirm_frames_) continue;
             if (!best || tr.hits > best->hits) best = &tr;
         }
-        if (!best) return;
+        if (!best) {
+            RCLCPP_INFO(get_logger(), "No confirmed ring (tracked=%zu hits<3)", tracked_.size());
+            return;
+        }
 
         RCLCPP_INFO(get_logger(),
             "PUBLISH ring: center=(%.2f,%.2f,%.2f) hits=%d",
