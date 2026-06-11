@@ -10,7 +10,7 @@ def generate_launch_description():
         parameters=[{
             'x_min': -1.3, 'x_max': 1.6,
             'y_min': -2.2, 'y_max': 0.0,
-            'z_min': -0.5, 'z_max': 1.4,
+            'z_min': -0.5, 'z_max': 1.2,
             'voxel_leaf': 0.03,
             'sor_enabled': True,
             'sor_mean_k': 20,
@@ -24,7 +24,7 @@ def generate_launch_description():
         name='shape_detect_node',
         output='screen',
         parameters=[{
-            'cluster_tolerance': 0.06,
+            'cluster_tolerance': 0.12,
             'min_cluster_size_ring': 40,
             'min_cluster_size_pillar': 80,
             'max_cluster_size': 20000,
