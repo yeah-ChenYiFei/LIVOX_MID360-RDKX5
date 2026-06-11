@@ -310,14 +310,18 @@ private:
             seg.setInputCloud(cloud);
             seg.segment(*inliers, *coeff);
 
-            if (!inliers->indices.empty()) {
-                double ratio = static_cast<double>(inliers->indices.size()) / cloud->size();
-                if (ratio > ransac_wall_ratio_) {
-                    pcl::ExtractIndices<PointT> extract;
-                    extract.setInputCloud(cloud);
-                    extract.setIndices(inliers);
-                    extract.setNegative(true);
-                    extract.filter(*cloud);
+            if (!inliers->indices.empty() && coeff->values.size() >= 4) {
+                // Skip if plane normal is mostly Y (ring's own XZ plane, not a wall)
+                double ny = std::fabs(coeff->values[1]);
+                if (ny < 0.8) {
+                    double ratio = static_cast<double>(inliers->indices.size()) / cloud->size();
+                    if (ratio > ransac_wall_ratio_) {
+                        pcl::ExtractIndices<PointT> extract;
+                        extract.setInputCloud(cloud);
+                        extract.setIndices(inliers);
+                        extract.setNegative(true);
+                        extract.filter(*cloud);
+                    }
                 }
             }
         }
